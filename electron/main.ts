@@ -32,6 +32,7 @@ function createWindow() {
     height: 920,
     minWidth: 1180,
     minHeight: 720,
+    show: false,
     backgroundColor: '#121215',
     icon: iconPath,
     title: 'FrameBackup — 4-Column Video & Photo Backup',
@@ -42,6 +43,10 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
@@ -187,15 +192,36 @@ function registerIpcHandlers() {
   });
 }
 
-app.whenReady().then(() => {
-  initGoogleDriveStorage(app.getPath('userData'));
-  registerIpcHandlers();
-  createWindow();
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+if (!gotSingleInstanceLock) {
+  // Another instance of FrameBackup is already running — quit immediately to avoid black screen / cache lock
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
   });
-});
+
+  app.whenReady().then(() => {
+    initGoogleDriveStorage(app.getPath('userData'));
+    registerIpcHandlers();
+    createWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      } else if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+  });
+}
 
 app.on('window-all-closed', async () => {
   await folderWatcher.stop();
