@@ -23,7 +23,7 @@ jobs:
             artifact_name: FrameBackup-Windows
             artifact_path: release/*.exe
           - os_label: macOS (.dmg)
-            runner: macos-latest
+            runner: macos-14
             build_cmd: npm run dist:mac
             artifact_name: FrameBackup-macOS
             artifact_path: release/*.dmg
