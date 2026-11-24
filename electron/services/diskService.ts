@@ -36,6 +36,7 @@ const RAW_EXTS = new Set(['.arw', '.cr2', '.cr3', '.nef', '.raf', '.dng', '.orf'
 export function isIgnoredSystemName(name: string): boolean {
   return (
     name.startsWith('._') ||
+    name.endsWith('.fbpart') ||
     name === '.DS_Store' ||
     name === 'Thumbs.db' ||
     name === 'Desktop.ini' ||
@@ -54,6 +55,31 @@ function classifyFile(fileName: string, isDirectory: boolean): { mediaType: File
   if (RAW_EXTS.has(ext)) return { mediaType: 'raw', extension: ext };
   if (PHOTO_EXTS.has(ext)) return { mediaType: 'photo', extension: ext };
   return { mediaType: 'other', extension: ext };
+}
+
+/**
+ * Runs async tasks with bounded concurrency so scanning thousands of RAW/video files
+ * is fast without exhausting OS file descriptors (EMFILE).
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R | null>
+): Promise<R[]> {
+  const results: R[] = [];
+  let cursor = 0;
+
+  async function runWorker() {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      const out = await worker(items[idx]);
+      if (out !== null) results.push(out);
+    }
+  }
+
+  const count = Math.min(concurrency, Math.max(1, items.length));
+  await Promise.all(Array.from({ length: count }, () => runWorker()));
+  return results;
 }
 
 export async function listSystemDrives(): Promise<DriveInfo[]> {
@@ -143,11 +169,9 @@ async function listPosixDrives(): Promise<DriveInfo[]> {
 export async function listDirectoryEntries(dirPath: string, readMetadata = true): Promise<FileEntry[]> {
   if (!dirPath) return [];
   try {
-    const dirents = await fs.readdir(dirPath, { withFileTypes: true });
-    const entries: FileEntry[] = [];
+    const dirents = (await fs.readdir(dirPath, { withFileTypes: true })).filter((d) => !isIgnoredSystemName(d.name));
 
-    for (const dirent of dirents) {
-      if (isIgnoredSystemName(dirent.name)) continue;
+    const entries = await mapWithConcurrency(dirents, 12, async (dirent): Promise<FileEntry | null> => {
       const fullPath = path.join(dirPath, dirent.name);
       try {
         const stat = await fs.stat(fullPath);
@@ -158,7 +182,7 @@ export async function listDirectoryEntries(dirPath: string, readMetadata = true)
             ? await readMediaShotDate(fullPath, stat.mtimeMs)
             : { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
 
-        entries.push({
+        return {
           name: dirent.name,
           relativePath: dirent.name,
           fullPath,
@@ -169,11 +193,11 @@ export async function listDirectoryEntries(dirPath: string, readMetadata = true)
           dateSource: meta.dateSource,
           mediaType,
           extension,
-        });
+        };
       } catch {
-        // Ignore unreadable system entries
+        return null;
       }
-    }
+    });
 
     return entries.sort((a, b) => {
       if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
@@ -185,10 +209,11 @@ export async function listDirectoryEntries(dirPath: string, readMetadata = true)
   }
 }
 
-export async function scanFilesRecursive(rootDir: string, readMetadata = true): Promise<FileEntry[]> {
-  const results: FileEntry[] = [];
+export async function scanFilesRecursive(rootDir: string, readMetadata = true, maxDepth = 10): Promise<FileEntry[]> {
+  const discoveredFiles: Array<{ name: string; fullPath: string }> = [];
 
-  async function walk(currentDir: string) {
+  async function collectPaths(currentDir: string, depth: number) {
+    if (depth > maxDepth) return;
     let dirents;
     try {
       dirents = await fs.readdir(currentDir, { withFileTypes: true });
@@ -199,34 +224,39 @@ export async function scanFilesRecursive(rootDir: string, readMetadata = true): 
       if (isIgnoredSystemName(dirent.name)) continue;
       const fullPath = path.join(currentDir, dirent.name);
       if (dirent.isDirectory()) {
-        await walk(fullPath);
+        await collectPaths(fullPath, depth + 1);
       } else if (dirent.isFile()) {
-        try {
-          const stat = await fs.stat(fullPath);
-          const { mediaType, extension } = classifyFile(dirent.name, false);
-          const meta = readMetadata
-            ? await readMediaShotDate(fullPath, stat.mtimeMs)
-            : { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
-
-          results.push({
-            name: dirent.name,
-            relativePath: path.relative(rootDir, fullPath),
-            fullPath,
-            isDirectory: false,
-            sizeBytes: stat.size,
-            mtimeMs: stat.mtimeMs,
-            shotTimeMs: meta.shotTimeMs,
-            dateSource: meta.dateSource,
-            mediaType,
-            extension,
-          });
-        } catch {
-          // Skip unreadable files
-        }
+        discoveredFiles.push({ name: dirent.name, fullPath });
       }
     }
   }
 
-  await walk(rootDir);
-  return results;
+  await collectPaths(rootDir, 0);
+
+  const entries = await mapWithConcurrency(discoveredFiles, 12, async (item): Promise<FileEntry | null> => {
+    try {
+      const stat = await fs.stat(item.fullPath);
+      const { mediaType, extension } = classifyFile(item.name, false);
+      const meta = readMetadata
+        ? await readMediaShotDate(item.fullPath, stat.mtimeMs)
+        : { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
+
+      return {
+        name: item.name,
+        relativePath: path.relative(rootDir, item.fullPath),
+        fullPath: item.fullPath,
+        isDirectory: false,
+        sizeBytes: stat.size,
+        mtimeMs: stat.mtimeMs,
+        shotTimeMs: meta.shotTimeMs,
+        dateSource: meta.dateSource,
+        mediaType,
+        extension,
+      };
+    } catch {
+      return null;
+    }
+  });
+
+  return entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 }

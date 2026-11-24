@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowUp,
   Camera,
   Cloud,
   Database,
@@ -27,8 +28,10 @@ import {
   formatBytes,
   formatDateKey,
   formatShortDate,
+  getParentDirectory,
   isTimestampMatchingTargetDate,
   parseGoogleDriveFolderId,
+  sanitizeFolderName,
   type CopyEngineId,
   type CopyEngineOption,
   type CopyProgressEvent,
@@ -93,6 +96,7 @@ export default function App() {
   // Column Paths & Entries
   const [cardPath, setCardPath] = useState('');
   const [cardFiles, setCardFiles] = useState<FileEntry[]>([]);
+  const [cardScanning, setCardScanning] = useState(false);
   const [cardMode, setCardMode] = useState<'ingest' | 'watch'>('ingest');
 
   const [drive1Path, setDrive1Path] = useState('');
@@ -173,6 +177,20 @@ export default function App() {
     };
   }, []);
 
+  const refreshCardRecursive = async (pathStr: string) => {
+    if (!pathStr || !window.frameBackup) {
+      setCardFiles([]);
+      return;
+    }
+    setCardScanning(true);
+    try {
+      const items = await window.frameBackup.scanRecursive(pathStr);
+      setCardFiles(items);
+    } finally {
+      setCardScanning(false);
+    }
+  };
+
   const refreshDirectory = async (pathStr: string, setter: (items: FileEntry[]) => void) => {
     if (!pathStr || !window.frameBackup) {
       setter([]);
@@ -198,7 +216,7 @@ export default function App() {
       setCardPath(picked);
       setAlertDismissed(false);
       setDateFilterMode('all');
-      await refreshDirectory(picked, setCardFiles);
+      await refreshCardRecursive(picked);
     } else if (col === 2) {
       setDrive1Path(picked);
       await refreshDirectory(picked, setDrive1Files);
@@ -233,8 +251,9 @@ export default function App() {
       showToast('Chưa chọn thư mục Ổ 2 (Sao lưu) nên chỉ hoàn tất bước 1.');
       return;
     }
+    const safeShow = sanitizeFolderName(projectNameRef.current) || 'FrameBackup_Show';
     setIsRunning(true);
-    const destOnDrive2 = joinPath(d2Base, projectNameRef.current);
+    const destOnDrive2 = joinPath(d2Base, safeShow);
     const res2 = await window.frameBackup.startCopyVerify({
       stage: 'drive1-to-drive2',
       sourceDir: sourceOnDrive1,
@@ -243,7 +262,8 @@ export default function App() {
     });
     setIsRunning(false);
     if (res2.success) {
-      showToast(`✅ Đã sao lưu & Verify 100% (${res2.verifiedFiles} files) sang Ổ 2!`);
+      const resumeNote = res2.resumedFiles > 0 ? `, Resume ${res2.resumedFiles} files` : '';
+      showToast(`✅ Xong Ổ 2 (${res2.verifiedFiles} files Verify OK${resumeNote}, engine: ${res2.usedEngine})!`);
       await refreshDirectory(d2Base, setDrive2Files);
       await loadSystemData();
     } else if (res2.error !== 'CANCELLED') {
@@ -261,6 +281,12 @@ export default function App() {
       return;
     }
 
+    const safeShow = sanitizeFolderName(projectName);
+    if (!safeShow) {
+      showToast('Tên Show không hợp lệ (không được để trống hoặc chỉ chứa ký tự đặc biệt).');
+      return;
+    }
+
     // Watch Mode: user copies manually into Drive 1, app watches Drive 1 then backs up to Drive 2
     if (cardMode === 'watch') {
       await window.frameBackup.setPreventSleep(true);
@@ -275,13 +301,23 @@ export default function App() {
       return;
     }
 
+    // Pre-flight storage check
+    if (d1Insufficient) {
+      showToast('❌ Ổ 1 không đủ dung lượng trống để chứa thẻ nhớ này! Hãy dọn ổ hoặc chọn ổ khác.');
+      return;
+    }
+    if (drive2Path && d2Insufficient) {
+      showToast('❌ Ổ 2 (Sao lưu) không đủ dung lượng trống! Hãy chọn ổ sao lưu khác.');
+      return;
+    }
+
     setIsRunning(true);
     setStep1Progress(null);
     setStep2Progress(null);
     await window.frameBackup.setPreventSleep(true);
     setSysInfo((prev) => ({ ...prev, preventSleepActive: true }));
 
-    const destOnDrive1 = joinPath(drive1Path, projectName);
+    const destOnDrive1 = joinPath(drive1Path, safeShow);
     const res1 = await window.frameBackup.startCopyVerify({
       stage: 'card-to-drive1',
       sourceDir: cardPath,
@@ -301,7 +337,10 @@ export default function App() {
     }
 
     await refreshDirectory(drive1Path, setDrive1Files);
-    showToast(`✅ Xong Ổ 1 (${res1.verifiedFiles} files, bỏ qua ${res1.skippedFiles} file lệch ngày) — Đang chạy Ổ 2...`);
+    const resumeNote = res1.resumedFiles > 0 ? `, Resume ${res1.resumedFiles}` : '';
+    showToast(
+      `✅ Xong Ổ 1 (${res1.verifiedFiles} files${resumeNote}, lọc bỏ ${res1.skippedFiles} file lệch ngày) — Đang chạy Ổ 2...`
+    );
 
     if (drive2Path) {
       await runDrive1ToDrive2(destOnDrive1);
@@ -599,7 +638,7 @@ export default function App() {
                 setCardPath(val);
                 setAlertDismissed(false);
                 setDateFilterMode('all');
-                void refreshDirectory(val, setCardFiles);
+                void refreshCardRecursive(val);
               }}
               className="flex-1 min-w-0 bg-[#101013] border border-[#2b2b34] rounded px-2 py-1 text-[11px] text-zinc-100 outline-none"
             >
@@ -640,7 +679,12 @@ export default function App() {
           </div>
 
           <div className="flex-1 overflow-auto">
-            {displayedCardFiles.length === 0 ? (
+            {cardScanning ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-4 text-blue-300 gap-2">
+                <RefreshCw className="w-6 h-6 animate-spin" />
+                <div className="text-xs">Đang quét toàn bộ file & Metadata EXIF/Video trên thẻ...</div>
+              </div>
+            ) : displayedCardFiles.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center p-4 text-zinc-500 gap-2">
                 <FolderOpen className="w-7 h-7 text-zinc-600" />
                 <div className="text-xs">Chọn thẻ nhớ / thư mục nguồn ở trên</div>
@@ -750,6 +794,21 @@ export default function App() {
           </div>
 
           <div className="p-1.5 bg-[#1b1b20] border-b border-[#2b2b34] flex items-center gap-1">
+            {getParentDirectory(drive1Path) && (
+              <button
+                onClick={() => {
+                  const p = getParentDirectory(drive1Path);
+                  if (p) {
+                    setDrive1Path(p);
+                    void refreshDirectory(p, setDrive1Files);
+                  }
+                }}
+                className="px-1.5 py-1 rounded bg-[#23232a] hover:bg-[#32323c] border border-[#3e3e4b] text-zinc-300 shrink-0"
+                title="Lên thư mục cha"
+              >
+                <ArrowUp className="w-3.5 h-3.5" />
+              </button>
+            )}
             <input
               type="text"
               value={drive1Path}
@@ -866,6 +925,21 @@ export default function App() {
           </div>
 
           <div className="p-1.5 bg-[#1b1b20] border-b border-[#2b2b34] flex items-center gap-1">
+            {getParentDirectory(drive2Path) && (
+              <button
+                onClick={() => {
+                  const p = getParentDirectory(drive2Path);
+                  if (p) {
+                    setDrive2Path(p);
+                    void refreshDirectory(p, setDrive2Files);
+                  }
+                }}
+                className="px-1.5 py-1 rounded bg-[#23232a] hover:bg-[#32323c] border border-[#3e3e4b] text-zinc-300 shrink-0"
+                title="Lên thư mục cha"
+              >
+                <ArrowUp className="w-3.5 h-3.5" />
+              </button>
+            )}
             <input
               type="text"
               value={drive2Path}

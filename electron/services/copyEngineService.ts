@@ -18,6 +18,18 @@ export interface CopyEngineOption {
   platform: 'all' | 'win32' | 'darwin';
 }
 
+/**
+ * Normalizes a directory path for Windows CLI tools like Robocopy so trailing backslashes
+ * never escape closing quotes in Windows CommandLineToArgvW parsing (e.g. "G:\" -> "G:\.").
+ */
+function safeWindowsCliDir(dirPath: string): string {
+  const resolved = path.resolve(dirPath);
+  if (/^[A-Za-z]:\\$/.test(resolved)) {
+    return `${resolved}.`;
+  }
+  return resolved.replace(/\\+$/, '');
+}
+
 async function findExecutable(candidates: string[], whichName?: string): Promise<string | undefined> {
   for (const p of candidates) {
     if (p && fs.existsSync(p)) return p;
@@ -40,7 +52,7 @@ export async function detectCopyEngines(): Promise<CopyEngineOption[]> {
     {
       id: 'builtin',
       name: 'FrameBackup Built-in (XXHash64)',
-      description: 'Mặc định — Hỗ trợ Date Guard, thanh % thật & Verify XXHash64',
+      description: 'Mặc định — Hỗ trợ Date Guard, Smart Resume, thanh % thật & Verify XXHash64',
       available: true,
       platform: 'all',
     },
@@ -130,7 +142,7 @@ export interface ExternalCopyParams {
   executablePath: string;
   sourceDir: string;
   destDir: string;
-  filteredFilePaths?: string[]; // Absolute paths (or relative for rsync) when Date Guard filters files
+  filteredFilePaths?: string[];
   relativeFilePaths?: string[];
   signal: AbortSignal;
   onLog?: (line: string) => void;
@@ -144,29 +156,46 @@ export async function runExternalCopyEngine(params: ExternalCopyParams): Promise
   let args: string[] = [];
 
   if (engine === 'teracopy') {
+    const safeDest = safeWindowsCliDir(destDir);
     if (filteredFilePaths && filteredFilePaths.length > 0) {
       tempListFile = path.join(os.tmpdir(), `framebackup_tera_${Date.now()}.txt`);
       await fsp.writeFile(tempListFile, filteredFilePaths.join('\r\n'), 'utf8');
-      args = ['Copy', `*${tempListFile}`, destDir, '/Close'];
+      args = ['Copy', `*${tempListFile}`, safeDest, '/Close'];
     } else {
-      args = ['Copy', sourceDir, destDir, '/Close'];
+      // Copy contents of sourceDir directly into destDir without extra nested wrapper
+      const topEntries = (await fsp.readdir(sourceDir)).map((name) => path.join(sourceDir, name));
+      tempListFile = path.join(os.tmpdir(), `framebackup_tera_${Date.now()}.txt`);
+      await fsp.writeFile(tempListFile, topEntries.join('\r\n'), 'utf8');
+      args = ['Copy', `*${tempListFile}`, safeDest, '/Close'];
     }
   } else if (engine === 'fastcopy') {
+    const safeDest = safeWindowsCliDir(destDir);
     if (filteredFilePaths && filteredFilePaths.length > 0) {
       tempListFile = path.join(os.tmpdir(), `framebackup_fast_${Date.now()}.txt`);
       await fsp.writeFile(tempListFile, filteredFilePaths.join('\r\n'), 'utf8');
-      args = ['/cmd=diff', '/verify', '/auto_close', `/srcfile=${tempListFile}`, `/to=${destDir}`];
+      args = ['/cmd=diff', '/verify', '/auto_close', `/srcfile=${tempListFile}`, `/to=${safeDest}`];
     } else {
-      args = ['/cmd=diff', '/verify', '/auto_close', sourceDir, `/to=${destDir}`];
+      const safeSrc = safeWindowsCliDir(sourceDir);
+      args = ['/cmd=diff', '/verify', '/auto_close', `${safeSrc}\\*`, `/to=${safeDest}`];
     }
   } else if (engine === 'robocopy') {
-    // Robocopy supports full directory copy; if filtered, we pass specific filenames in sourceDir
-    args = [sourceDir, destDir, '/E', '/MT:8', '/R:2', '/W:3', '/COPY:DAT', '/NP', '/NFL', '/NDL'];
+    args = [
+      safeWindowsCliDir(sourceDir),
+      safeWindowsCliDir(destDir),
+      '/E',
+      '/MT:8',
+      '/R:2',
+      '/W:3',
+      '/COPY:DAT',
+      '/NP',
+      '/NFL',
+      '/NDL',
+    ];
   } else if (engine === 'rsync') {
     if (relativeFilePaths && relativeFilePaths.length > 0) {
       tempListFile = path.join(os.tmpdir(), `framebackup_rsync_${Date.now()}.txt`);
       await fsp.writeFile(tempListFile, relativeFilePaths.join('\n'), 'utf8');
-      args = ['-a', '--files-from=' + tempListFile, sourceDir, destDir];
+      args = ['-a', '--relative', `--files-from=${tempListFile}`, sourceDir, destDir];
     } else {
       const normalizedSrc = sourceDir.endsWith('/') ? sourceDir : `${sourceDir}/`;
       args = ['-a', normalizedSrc, destDir];
@@ -205,7 +234,6 @@ export async function runExternalCopyEngine(params: ExternalCopyParams): Promise
       child.on('close', (code) => {
         signal.removeEventListener('abort', onAbort);
         const exitCode = code ?? 0;
-        // Robocopy returns 0-7 for success; >=8 indicates error
         const ok = engine === 'robocopy' ? exitCode < 8 : exitCode === 0;
         if (ok) resolve();
         else reject(new Error(`Trình copy ${engine} kết thúc với mã lỗi ${exitCode}`));

@@ -24,6 +24,7 @@ export interface CopyProgressEvent {
   filesCompleted: number;
   totalFiles: number;
   skippedFiles: number;
+  resumedFiles: number;
   verifiedFiles: number;
   bytesCopied: number;
   totalBytes: number;
@@ -37,10 +38,12 @@ export interface CopyVerifySummary {
   success: boolean;
   totalFiles: number;
   copiedFiles: number;
+  resumedFiles: number;
   verifiedFiles: number;
   skippedFiles: number;
   totalBytes: number;
   destDir: string;
+  usedEngine: CopyEngineId;
   error?: string;
 }
 
@@ -75,6 +78,25 @@ function isMatchingTargetDate(shotTimeMs: number, targetDate?: string, overnight
   return false;
 }
 
+/**
+ * Prevents catastrophic self-copying (destDir === sourceDir or destDir nested inside sourceDir).
+ */
+function assertNonOverlappingDirs(sourceDir: string, destDir: string): void {
+  const normSrc = path.resolve(sourceDir);
+  const normDest = path.resolve(destDir);
+  const cmpSrc = process.platform === 'win32' ? normSrc.toLowerCase() : normSrc;
+  const cmpDest = process.platform === 'win32' ? normDest.toLowerCase() : normDest;
+  const sep = path.sep;
+
+  if (cmpSrc === cmpDest) {
+    throw new Error('Thư mục đích không được trùng với thư mục nguồn!');
+  }
+  const srcPrefix = cmpSrc.endsWith(sep) ? cmpSrc : `${cmpSrc}${sep}`;
+  if (cmpDest.startsWith(srcPrefix)) {
+    throw new Error('Thư mục đích không được nằm bên trong thư mục nguồn (tránh vòng lặp vô hạn)!');
+  }
+}
+
 async function hashFileXx64(filePath: string, signal: AbortSignal): Promise<string> {
   const api = await getXxhash();
   const hasher = api.create64();
@@ -101,9 +123,10 @@ async function hashFileXx64(filePath: string, signal: AbortSignal): Promise<stri
   });
 }
 
-async function copyFileAndHashSource(
+async function copyFileAtomicAndHashSource(
   srcPath: string,
   destPath: string,
+  mtimeMs: number,
   signal: AbortSignal,
   onChunk: (bytes: number) => void
 ): Promise<string> {
@@ -111,46 +134,69 @@ async function copyFileAndHashSource(
   const hasher = api.create64();
   await fsp.mkdir(path.dirname(destPath), { recursive: true });
 
-  return new Promise<string>((resolve, reject) => {
-    const reader = fs.createReadStream(srcPath, { highWaterMark: 4 * 1024 * 1024 });
-    const writer = fs.createWriteStream(destPath, { highWaterMark: 4 * 1024 * 1024 });
+  // Write to temp .fbpart file first so cancel/disconnect never leaves a corrupt partial file
+  const tmpDest = `${destPath}.fbpart`;
 
-    const cleanup = () => {
-      signal.removeEventListener('abort', onAbort);
-    };
-    const onAbort = () => {
-      reader.destroy();
-      writer.destroy();
-      reject(new Error('CANCELLED'));
-    };
-    if (signal.aborted) return onAbort();
-    signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    const srcHash = await new Promise<string>((resolve, reject) => {
+      const reader = fs.createReadStream(srcPath, { highWaterMark: 4 * 1024 * 1024 });
+      const writer = fs.createWriteStream(tmpDest, { highWaterMark: 4 * 1024 * 1024 });
 
-    reader.on('data', (chunk: Buffer | string) => {
-      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-      hasher.update(buf);
-      onChunk(buf.length);
+      const cleanup = () => {
+        signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        reader.destroy();
+        writer.destroy();
+        reject(new Error('CANCELLED'));
+      };
+      if (signal.aborted) return onAbort();
+      signal.addEventListener('abort', onAbort, { once: true });
+
+      reader.on('data', (chunk: Buffer | string) => {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        hasher.update(buf);
+        onChunk(buf.length);
+      });
+
+      reader.on('error', (err) => {
+        cleanup();
+        writer.destroy();
+        reject(err);
+      });
+
+      writer.on('error', (err) => {
+        cleanup();
+        reader.destroy();
+        reject(err);
+      });
+
+      writer.on('finish', () => {
+        cleanup();
+        resolve(hasher.digest().toString(16));
+      });
+
+      reader.pipe(writer);
     });
 
-    reader.on('error', (err) => {
-      cleanup();
-      writer.destroy();
-      reject(err);
-    });
+    // Preserve original mtime before verification & atomic rename
+    const mtimeDate = new Date(mtimeMs);
+    await fsp.utimes(tmpDest, mtimeDate, mtimeDate).catch(() => {});
 
-    writer.on('error', (err) => {
-      cleanup();
-      reader.destroy();
-      reject(err);
-    });
+    // Verify XXHash64 of tmpDest against source stream hash
+    const destHash = await hashFileXx64(tmpDest, signal);
+    if (srcHash !== destHash) {
+      throw new Error(`Lỗi toàn vẹn dữ liệu (XXHash64 không khớp) ở file: ${path.basename(destPath)}`);
+    }
 
-    writer.on('finish', () => {
-      cleanup();
-      resolve(hasher.digest().toString(16));
-    });
-
-    reader.pipe(writer);
-  });
+    // Atomic promotion to final filename
+    await fsp.rename(tmpDest, destPath);
+    return srcHash;
+  } catch (err) {
+    // Always remove incomplete .fbpart file on error or cancellation
+    await fsp.unlink(tmpDest).catch(() => {});
+    throw err;
+  }
 }
 
 export function cancelActiveCopy(): boolean {
@@ -178,12 +224,15 @@ export async function runCopyAndVerify(
   };
 
   try {
+    assertNonOverlappingDirs(req.sourceDir, req.destDir);
+
     emit({
       status: 'scanning',
       currentFile: 'Đang quét danh sách file & metadata...',
       filesCompleted: 0,
       totalFiles: 0,
       skippedFiles: 0,
+      resumedFiles: 0,
       verifiedFiles: 0,
       bytesCopied: 0,
       totalBytes: 0,
@@ -213,18 +262,25 @@ export async function runCopyAndVerify(
     const totalFiles = filesToCopy.length;
     let bytesCopied = 0;
     let filesCompleted = 0;
+    let resumedFiles = 0;
     let verifiedFiles = 0;
     const startedAt = Date.now();
     let lastEmitAt = 0;
 
     await fsp.mkdir(req.destDir, { recursive: true });
 
-    // Dispatch to external copy engine if requested & compatible with Date Guard mode
+    // Check if an external copy engine can be safely used without losing folder structure or bypassing Date Guard
     const requestedEngine = req.engine ?? 'builtin';
+    const hasNestedSubdirs = filesToCopy.some((f) => f.relativePath.includes(path.sep));
+    const externalWouldFlattenFilteredSubdirs =
+      skippedFiles > 0 && hasNestedSubdirs && (requestedEngine === 'teracopy' || requestedEngine === 'fastcopy');
+
     const canUseExternal =
       requestedEngine !== 'builtin' &&
+      totalFiles > 0 &&
       !(req.stage === 'card-to-drive1' && filterMode === 'split') &&
-      !(skippedFiles > 0 && (requestedEngine === 'robocopy' || requestedEngine === 'ditto'));
+      !(skippedFiles > 0 && (requestedEngine === 'robocopy' || requestedEngine === 'ditto')) &&
+      !externalWouldFlattenFilteredSubdirs;
 
     if (canUseExternal) {
       const detected = await detectCopyEngines();
@@ -236,6 +292,7 @@ export async function runCopyAndVerify(
           filesCompleted: 0,
           totalFiles,
           skippedFiles,
+          resumedFiles: 0,
           verifiedFiles: 0,
           bytesCopied: 0,
           totalBytes,
@@ -260,6 +317,7 @@ export async function runCopyAndVerify(
           filesCompleted: totalFiles,
           totalFiles,
           skippedFiles,
+          resumedFiles: 0,
           verifiedFiles: totalFiles,
           bytesCopied: totalBytes,
           totalBytes,
@@ -273,14 +331,17 @@ export async function runCopyAndVerify(
           success: true,
           totalFiles,
           copiedFiles: totalFiles,
+          resumedFiles: 0,
           verifiedFiles: totalFiles,
           skippedFiles,
           totalBytes,
           destDir: req.destDir,
+          usedEngine: requestedEngine,
         };
       }
     }
 
+    // Built-in atomic streaming copy + Smart Resume + XXHash64 verification
     for (const file of filesToCopy) {
       if (signal.aborted) throw new Error('CANCELLED');
 
@@ -292,50 +353,62 @@ export async function runCopyAndVerify(
         destPath = path.join(req.destDir, file.relativePath);
       }
 
-      const srcHash = await copyFileAndHashSource(file.fullPath, destPath, signal, (chunkBytes) => {
-        bytesCopied += chunkBytes;
-        const now = Date.now();
-        if (now - lastEmitAt > 120) {
-          lastEmitAt = now;
-          const elapsedSec = Math.max((now - startedAt) / 1000, 0.1);
-          const speedMBs = Number((bytesCopied / (1024 * 1024) / elapsedSec).toFixed(1));
-          const percent = totalBytes > 0 ? Math.min(99, Math.round((bytesCopied / totalBytes) * 100)) : 0;
+      // Smart Resume: if destination already exists with same size AND matching XXHash64, skip re-copy
+      let alreadyIdentical = false;
+      try {
+        const existingStat = await fsp.stat(destPath);
+        if (existingStat.isFile() && existingStat.size === file.sizeBytes) {
           emit({
-            status: 'copying',
-            currentFile: file.name,
+            status: 'verifying',
+            currentFile: `Kiểm tra file đã có (Resume): ${file.name}`,
             filesCompleted,
             totalFiles,
             skippedFiles,
+            resumedFiles,
             verifiedFiles,
             bytesCopied,
             totalBytes,
-            percent,
-            speedMBs,
+            percent: totalBytes > 0 ? Math.min(99, Math.round((bytesCopied / totalBytes) * 100)) : 0,
+            speedMBs: Number((bytesCopied / (1024 * 1024) / Math.max((Date.now() - startedAt) / 1000, 0.1)).toFixed(1)),
           });
+          const [srcHash, dstHash] = await Promise.all([
+            hashFileXx64(file.fullPath, signal),
+            hashFileXx64(destPath, signal),
+          ]);
+          if (srcHash === dstHash) {
+            alreadyIdentical = true;
+            bytesCopied += file.sizeBytes;
+            resumedFiles += 1;
+          }
         }
-      });
+      } catch {
+        // Destination doesn't exist yet -> proceed with copy
+      }
 
-      // Preserve original mtime on destination file
-      const mtimeDate = new Date(file.mtimeMs);
-      await fsp.utimes(destPath, mtimeDate, mtimeDate).catch(() => {});
-
-      // Verify destination with XXHash64
-      emit({
-        status: 'verifying',
-        currentFile: `Verify XXHash64: ${file.name}`,
-        filesCompleted,
-        totalFiles,
-        skippedFiles,
-        verifiedFiles,
-        bytesCopied,
-        totalBytes,
-        percent: totalBytes > 0 ? Math.min(99, Math.round((bytesCopied / totalBytes) * 100)) : 0,
-        speedMBs: Number((bytesCopied / (1024 * 1024) / Math.max((Date.now() - startedAt) / 1000, 0.1)).toFixed(1)),
-      });
-
-      const destHash = await hashFileXx64(destPath, signal);
-      if (srcHash !== destHash) {
-        throw new Error(`Lỗi toàn vẹn dữ liệu (XXHash64 không khớp) ở file: ${file.name}`);
+      if (!alreadyIdentical) {
+        await copyFileAtomicAndHashSource(file.fullPath, destPath, file.mtimeMs, signal, (chunkBytes) => {
+          bytesCopied += chunkBytes;
+          const now = Date.now();
+          if (now - lastEmitAt > 120) {
+            lastEmitAt = now;
+            const elapsedSec = Math.max((now - startedAt) / 1000, 0.1);
+            const speedMBs = Number((bytesCopied / (1024 * 1024) / elapsedSec).toFixed(1));
+            const percent = totalBytes > 0 ? Math.min(99, Math.round((bytesCopied / totalBytes) * 100)) : 0;
+            emit({
+              status: 'copying',
+              currentFile: file.name,
+              filesCompleted,
+              totalFiles,
+              skippedFiles,
+              resumedFiles,
+              verifiedFiles,
+              bytesCopied,
+              totalBytes,
+              percent,
+              speedMBs,
+            });
+          }
+        });
       }
 
       filesCompleted += 1;
@@ -345,10 +418,11 @@ export async function runCopyAndVerify(
     const elapsedSec = Math.max((Date.now() - startedAt) / 1000, 0.1);
     emit({
       status: 'completed',
-      currentFile: 'Hoàn tất & Verify 100%',
+      currentFile: resumedFiles > 0 ? `Hoàn tất & Verify 100% (Resume ${resumedFiles} files)` : 'Hoàn tất & Verify 100%',
       filesCompleted,
       totalFiles,
       skippedFiles,
+      resumedFiles,
       verifiedFiles,
       bytesCopied: totalBytes,
       totalBytes,
@@ -361,11 +435,13 @@ export async function runCopyAndVerify(
       stage: req.stage,
       success: true,
       totalFiles,
-      copiedFiles: filesCompleted,
+      copiedFiles: filesCompleted - resumedFiles,
+      resumedFiles,
       verifiedFiles,
       skippedFiles,
       totalBytes,
       destDir: req.destDir,
+      usedEngine: 'builtin',
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -376,6 +452,7 @@ export async function runCopyAndVerify(
       filesCompleted: 0,
       totalFiles: 0,
       skippedFiles: 0,
+      resumedFiles: 0,
       verifiedFiles: 0,
       bytesCopied: 0,
       totalBytes: 0,
@@ -389,10 +466,12 @@ export async function runCopyAndVerify(
       success: false,
       totalFiles: 0,
       copiedFiles: 0,
+      resumedFiles: 0,
       verifiedFiles: 0,
       skippedFiles: 0,
       totalBytes: 0,
       destDir: req.destDir,
+      usedEngine: req.engine ?? 'builtin',
       error: message,
     };
   }

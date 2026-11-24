@@ -58,6 +58,7 @@ export interface CopyProgressEvent {
   filesCompleted: number;
   totalFiles: number;
   skippedFiles: number;
+  resumedFiles: number;
   verifiedFiles: number;
   bytesCopied: number;
   totalBytes: number;
@@ -71,10 +72,12 @@ export interface CopyVerifySummary {
   success: boolean;
   totalFiles: number;
   copiedFiles: number;
+  resumedFiles: number;
   verifiedFiles: number;
   skippedFiles: number;
   totalBytes: number;
   destDir: string;
+  usedEngine: CopyEngineId;
   error?: string;
 }
 
@@ -168,4 +171,25 @@ export function parseGoogleDriveFolderId(input: string): string | null {
   if (idParamMatch) return idParamMatch[1];
   if (/^[a-zA-Z0-9_-]{15,}$/.test(trimmed)) return trimmed;
   return null;
+}
+
+/** Removes characters illegal in Windows/macOS folder names. */
+export function sanitizeFolderName(name: string): string {
+  return name
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/\.+$/g, '')
+    .trim();
+}
+
+export function getParentDirectory(dirPath: string): string | null {
+  if (!dirPath) return null;
+  const isWin = dirPath.includes('\\') || /^[A-Za-z]:/.test(dirPath);
+  const sep = isWin ? '\\' : '/';
+  const cleaned = dirPath.replace(/[\\/]+$/, '');
+  if (!cleaned || (isWin && /^[A-Za-z]:$/.test(cleaned))) return null;
+  const idx = Math.max(cleaned.lastIndexOf('\\'), cleaned.lastIndexOf('/'));
+  if (idx < 0) return null;
+  const parent = cleaned.slice(0, idx);
+  if (isWin && /^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
+  return parent || sep;
 }
