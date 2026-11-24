@@ -1,4 +1,6 @@
-# Assistant Video & Photo Backup (4-Column DIT Pipeline)
+# FrameBackup — 4-Column Video & Photo Backup Assistant
+
+[![GitHub](https://img.shields.io/badge/GitHub-FrameBackup-181717?logo=github)](https://github.com/quangdung94-coder/FrameBackup)
 
 Ứng dụng Desktop đa nền tảng (**Windows & macOS**) hỗ trợ quản lý và tự động hóa toàn bộ quy trình sao lưu dữ liệu quay phim/chụp ảnh ban đêm theo luồng **4 cột liên thông**:
 
