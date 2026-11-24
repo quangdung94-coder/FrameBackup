@@ -2,6 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { CopyEngineOption } from './services/copyEngineService';
 import type { CopyProgressEvent, CopyVerifyRequest, CopyVerifySummary } from './services/copyVerifyService';
 import type { DriveInfo, FileEntry } from './services/diskService';
+import type {
+  DriveAuthStatus,
+  DriveFolderCheckResult,
+  DriveUploadProgressEvent,
+  DriveUploadRequest,
+  DriveUploadSummary,
+} from './services/googleDriveService';
 import type { InspectReportRequest, MediaReportResult } from './services/mediaInspectorService';
 import type { PackageProgressEvent, PackageRequest, PackageResult } from './services/packagingService';
 import type { WatchStatusEvent } from './services/watchService';
@@ -57,6 +64,23 @@ const api = {
     const handler = (_event: Electron.IpcRendererEvent, data: PackageProgressEvent) => callback(data);
     ipcRenderer.on('package:progress', handler);
     return () => ipcRenderer.removeListener('package:progress', handler);
+  },
+
+  // Phase 4: Google Drive API v3
+  getDriveAuthStatus: (): Promise<DriveAuthStatus> => ipcRenderer.invoke('drive:getAuthStatus'),
+  importDriveCredentials: (): Promise<{ ok: boolean; message: string }> =>
+    ipcRenderer.invoke('drive:importCredentials'),
+  signInGoogleDrive: (): Promise<DriveAuthStatus> => ipcRenderer.invoke('drive:signIn'),
+  signOutGoogleDrive: (): Promise<DriveAuthStatus> => ipcRenderer.invoke('drive:signOut'),
+  checkDriveFolder: (urlOrId: string): Promise<DriveFolderCheckResult> =>
+    ipcRenderer.invoke('drive:checkFolder', urlOrId),
+  uploadToGoogleDrive: (req: DriveUploadRequest): Promise<DriveUploadSummary> =>
+    ipcRenderer.invoke('drive:upload', req),
+  cancelDriveUpload: (): Promise<boolean> => ipcRenderer.invoke('drive:cancelUpload'),
+  onDriveUploadProgress: (callback: (ev: DriveUploadProgressEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: DriveUploadProgressEvent) => callback(data);
+    ipcRenderer.on('drive:uploadProgress', handler);
+    return () => ipcRenderer.removeListener('drive:uploadProgress', handler);
   },
 };
 

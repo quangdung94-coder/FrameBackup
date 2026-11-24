@@ -22,6 +22,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { DateMismatchAlert, type DateGroupSummary } from './components/DateMismatchAlert';
+import { GoogleDriveAuthModal } from './components/GoogleDriveAuthModal';
 import { PipelineBar, type ActivityLogEntry } from './components/PipelineBar';
 import { ReportPreviewModal } from './components/ReportPreviewModal';
 import {
@@ -36,7 +37,11 @@ import {
   type CopyEngineOption,
   type CopyProgressEvent,
   type DateFilterMode,
+  type DriveAuthStatus,
+  type DriveFolderCheckResult,
   type DriveInfo,
+  type DriveUploadItem,
+  type DriveUploadProgressEvent,
   type FileEntry,
   type MediaReportResult,
   type PackMode,
@@ -153,6 +158,10 @@ export default function App() {
   const [drive2Files, setDrive2Files] = useState<FileEntry[]>([]);
 
   const [driveLink, setDriveLink] = useState('');
+  const [driveAuth, setDriveAuth] = useState<DriveAuthStatus>({ hasCredentials: false, signedIn: false });
+  const [driveAuthModalOpen, setDriveAuthModalOpen] = useState(false);
+  const [driveFolderCheck, setDriveFolderCheck] = useState<DriveFolderCheckResult | null>(null);
+  const [checkingDriveLink, setCheckingDriveLink] = useState(false);
   const [projectName, setProjectName] = useState(() => `${getTodayDateString().replace(/-/g, '.')}.New_Show`);
 
   // Settings (Telegram removed — Drive Report + Sleep/Shutdown only)
@@ -166,11 +175,12 @@ export default function App() {
   const [alertDismissed, setAlertDismissed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
 
-  // Phase 2 & 3 Live Pipeline State
+  // Phase 2, 3 & 4 Live Pipeline State
   const [isRunning, setIsRunning] = useState(false);
   const [step1Progress, setStep1Progress] = useState<CopyProgressEvent | null>(null);
   const [step2Progress, setStep2Progress] = useState<CopyProgressEvent | null>(null);
   const [step3Progress, setStep3Progress] = useState<PackageProgressEvent | null>(null);
+  const [step4Progress, setStep4Progress] = useState<DriveUploadProgressEvent | null>(null);
   const [mediaReport, setMediaReport] = useState<MediaReportResult | null>(null);
   const [watchStatus, setWatchStatus] = useState<WatchStatusEvent | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -182,11 +192,15 @@ export default function App() {
   const projectNameRef = useRef(projectName);
   const selectedCopyEngineRef = useRef(selectedCopyEngine);
   const packModeRef = useRef(packMode);
+  const driveLinkRef = useRef(driveLink);
+  const driveAuthRef = useRef(driveAuth);
   drive1PathRef.current = drive1Path;
   drive2PathRef.current = drive2Path;
   projectNameRef.current = projectName;
   selectedCopyEngineRef.current = selectedCopyEngine;
   packModeRef.current = packMode;
+  driveLinkRef.current = driveLink;
+  driveAuthRef.current = driveAuth;
 
   const parsedDriveFolderId = useMemo(() => parseGoogleDriveFolderId(driveLink), [driveLink]);
 
@@ -308,14 +322,16 @@ export default function App() {
 
   const loadSystemData = async () => {
     if (!window.frameBackup) return;
-    const [info, diskList, engineList] = await Promise.all([
+    const [info, diskList, engineList, authStatus] = await Promise.all([
       window.frameBackup.getSystemInfo(),
       window.frameBackup.listDrives(),
       window.frameBackup.listCopyEngines(),
+      window.frameBackup.getDriveAuthStatus(),
     ]);
     setSysInfo(info);
     setDrives(diskList);
     if (engineList.length > 0) setCopyEngines(engineList);
+    setDriveAuth(authStatus);
   };
 
   useEffect(() => {
@@ -331,16 +347,21 @@ export default function App() {
       setStep3Progress(ev);
     });
 
+    const unsubDrive = window.frameBackup.onDriveUploadProgress((ev) => {
+      setStep4Progress(ev);
+    });
+
     const unsubWatch = window.frameBackup.onWatchStatus((st) => {
       setWatchStatus(st);
       if (st.state === 'ready') {
-        void runStep2And3(st.watchDir, 0, 0);
+        void runStep2To4(st.watchDir, 0, 0);
       }
     });
 
     return () => {
       unsubCopy();
       unsubPack();
+      unsubDrive();
       unsubWatch();
     };
   }, []);
@@ -430,7 +451,28 @@ export default function App() {
     }
   };
 
-  const runStep2And3 = async (
+  const handleCheckDriveLink = async (linkOverride?: string) => {
+    if (!window.frameBackup) return;
+    const target = (linkOverride ?? driveLink).trim();
+    if (!target) {
+      showToast('Hãy dán link thư mục Google Drive trước khi kiểm tra.');
+      return;
+    }
+    setCheckingDriveLink(true);
+    try {
+      const res = await window.frameBackup.checkDriveFolder(target);
+      setDriveFolderCheck(res);
+      if (res.ok) {
+        showToast(`✅ Kết nối thư mục Drive "${res.folderName}" — Quyền Editor OK!`);
+      } else if (res.error) {
+        showToast(`⚠️ ${res.error}`);
+      }
+    } finally {
+      setCheckingDriveLink(false);
+    }
+  };
+
+  const runStep2To4 = async (
     sourceOnDrive1: string,
     skippedOldFiles: number,
     keptMismatchFiles: number
@@ -478,15 +520,73 @@ export default function App() {
         packMode: packModeRef.current,
       });
 
-      await loadSystemData();
+      if (!packRes.success) {
+        if (packRes.error !== 'CANCELLED') {
+          showToast(`❌ Lỗi đóng gói: ${packRes.error}`);
+        }
+        return;
+      }
 
-      if (packRes.success) {
-        showToast('✅ Xong Bước 1–3 (Backup + Thumbnail + Đóng gói)! Bấm "Xem trước Báo cáo" để kiểm tra.');
-      } else if (packRes.error !== 'CANCELLED') {
-        showToast(`❌ Lỗi đóng gói: ${packRes.error}`);
+      // Phase 4: Resumable Upload to Google Drive (Report + 2 Thumbnails + Archives/Loose Files)
+      const folderId = parseGoogleDriveFolderId(driveLinkRef.current);
+      if (folderId && driveAuthRef.current.signedIn) {
+        const uploadItems: DriveUploadItem[] = [];
+
+        // 1. Report + 2 Thumbnails right at top of Drive folder
+        uploadItems.push({ localPath: report.reportFilePath, remoteName: report.reportFileName });
+        if (report.firstShot?.thumbnailPath && report.firstShot.thumbnailFileName) {
+          uploadItems.push({
+            localPath: report.firstShot.thumbnailPath,
+            remoteName: report.firstShot.thumbnailFileName,
+          });
+        }
+        if (report.lastShot?.thumbnailPath && report.lastShot.thumbnailFileName) {
+          uploadItems.push({
+            localPath: report.lastShot.thumbnailPath,
+            remoteName: report.lastShot.thumbnailFileName,
+          });
+        }
+
+        // 2. Packaged archives (Zip Store / 7z)
+        for (const ap of packRes.archivePaths) {
+          const baseName = ap.split(/[\\/]/).pop() || 'archive.zip';
+          uploadItems.push({ localPath: ap, remoteName: baseName });
+        }
+
+        // 3. Loose files (preserving relative subfolder structure)
+        const normalizedRoot = sourceOnDrive1.replace(/[\\/]+$/, '');
+        for (const fp of packRes.looseFilePaths) {
+          const rel = fp.startsWith(normalizedRoot) ? fp.slice(normalizedRoot.length).replace(/^[\\/]+/, '') : '';
+          const parts = rel.split(/[\\/]+/).filter(Boolean);
+          const remoteName = parts.pop() || fp.split(/[\\/]/).pop() || 'file';
+          const relativeSubdir = parts.length > 0 ? parts.join('/') : undefined;
+          uploadItems.push({ localPath: fp, remoteName, relativeSubdir });
+        }
+
+        const upRes = await window.frameBackup.uploadToGoogleDrive({
+          parentFolderId: folderId,
+          items: uploadItems,
+          cleanupArchivePaths: packRes.archivePaths,
+        });
+
+        await loadSystemData();
+
+        if (upRes.success) {
+          showToast(`✅ HOÀN TẤT 100%! Đã upload ${upRes.filesUploaded} files + Báo cáo & 2 Thumbnail lên Google Drive.`);
+          void handleCheckDriveLink(driveLinkRef.current);
+        } else if (upRes.error !== 'CANCELLED') {
+          showToast(`❌ Lỗi Upload Google Drive: ${upRes.error}`);
+        }
+      } else {
+        await loadSystemData();
+        showToast(
+          folderId
+            ? '✅ Xong Bước 1–3! Hãy đăng nhập Google Drive ở Cột 4 để bật tự động Upload.'
+            : '✅ Xong Bước 1–3 (Backup + Thumbnail + Đóng gói)! Dán Link Drive ở Cột 4 nếu muốn Upload.'
+        );
       }
     } catch (err) {
-      showToast(`❌ Lỗi xử lý Bước 2–3: ${err instanceof Error ? err.message : String(err)}`);
+      showToast(`❌ Lỗi xử lý Bước 2–4: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsRunning(false);
     }
@@ -536,6 +636,7 @@ export default function App() {
     setStep1Progress(null);
     setStep2Progress(null);
     setStep3Progress(null);
+    setStep4Progress(null);
     setMediaReport(null);
 
     try {
@@ -571,7 +672,7 @@ export default function App() {
         dateFilterMode === 'all'
           ? dateGroups.filter((g) => !g.isTarget).reduce((acc, g) => acc + g.count, 0)
           : 0;
-      await runStep2And3(destOnDrive1, res1.skippedFiles, keptMismatch);
+      await runStep2To4(destOnDrive1, res1.skippedFiles, keptMismatch);
     } catch (err) {
       setIsRunning(false);
       showToast(`❌ Lỗi chuỗi sao lưu: ${err instanceof Error ? err.message : String(err)}`);
@@ -582,6 +683,7 @@ export default function App() {
     if (!window.frameBackup) return;
     await window.frameBackup.cancelCopy();
     await window.frameBackup.cancelPackaging();
+    await window.frameBackup.cancelDriveUpload();
     await window.frameBackup.stopWatch();
     setWatchStatus(null);
     setIsRunning(false);
@@ -653,7 +755,7 @@ export default function App() {
       <div className="h-10 bg-[#0d0d10] border-b border-[#2b2b34] px-4 flex items-center justify-between text-xs text-zinc-400 shrink-0">
         <div className="flex items-center gap-2.5 font-semibold text-zinc-100 min-w-0">
           <HardDrive className="w-4 h-4 text-blue-500 shrink-0" />
-          <span className="text-[13px] shrink-0">FrameBackup v0.3.0</span>
+          <span className="text-[13px] shrink-0">FrameBackup v0.4.0</span>
           <span className="text-[11px] px-2 py-0.5 rounded bg-[#23232b] border border-[#3e3e4b] text-zinc-300 shrink-0">
             {osBadge} ({sysInfo.arch})
           </span>
@@ -1331,19 +1433,41 @@ export default function App() {
                 </span>
                 <span>GOOGLE DRIVE</span>
               </div>
-              <button
-                onClick={() => handleToggleExpandCol(4)}
-                className="p-1 rounded bg-[#23232a] hover:bg-[#2e2e38] text-zinc-400 hover:text-white"
-                title="Phóng to / Thu đều cột"
-              >
-                {expandedCol === 4 ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setDriveAuthModalOpen(true)}
+                  className={`px-2 py-0.5 rounded text-[10.5px] font-semibold border transition ${
+                    driveAuth.signedIn
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
+                      : 'bg-purple-600/25 border-purple-500/50 text-purple-200 hover:bg-purple-600/40'
+                  }`}
+                >
+                  {driveAuth.signedIn ? '✓ Drive OK' : 'Kết nối Drive'}
+                </button>
+                <button
+                  onClick={() => handleToggleExpandCol(4)}
+                  className="p-1 rounded bg-[#23232a] hover:bg-[#2e2e38] text-zinc-400 hover:text-white"
+                  title="Phóng to / Thu đều cột"
+                >
+                  {expandedCol === 4 ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                </button>
+              </div>
             </div>
-            <div className="flex items-center justify-between text-[10.5px] text-zinc-400">
-              <span>Google Drive API v3 (Phase 4)</span>
-              <span className={parsedDriveFolderId ? 'text-emerald-400 font-semibold' : 'text-zinc-500'}>
-                {parsedDriveFolderId ? '✓ Link hợp lệ' : 'Chưa dán link'}
+            <div className="flex items-center justify-between text-[10.5px] text-zinc-400 gap-2">
+              <span className="truncate">
+                {driveAuth.signedIn
+                  ? `${driveAuth.email}${
+                      driveAuth.quotaLimitBytes && driveAuth.quotaUsageBytes !== undefined
+                        ? ` • Trống ${formatBytes(Math.max(0, driveAuth.quotaLimitBytes - driveAuth.quotaUsageBytes))}`
+                        : ''
+                    }`
+                  : 'Chưa đăng nhập Google Drive'}
               </span>
+              {driveFolderCheck && (
+                <span className={driveFolderCheck.canEdit ? 'text-emerald-400 font-semibold shrink-0' : 'text-red-400 font-semibold shrink-0'}>
+                  {driveFolderCheck.canEdit ? '✓ Editor' : '✕ Chỉ xem'}
+                </span>
+              )}
             </div>
           </div>
 
@@ -1353,40 +1477,93 @@ export default function App() {
               <input
                 type="text"
                 value={driveLink}
-                onChange={(e) => setDriveLink(e.target.value)}
+                onChange={(e) => {
+                  setDriveLink(e.target.value);
+                  setDriveFolderCheck(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleCheckDriveLink();
+                }}
                 placeholder="Dán link thư mục Google Drive..."
                 className="w-full bg-transparent text-[11px] text-zinc-100 outline-none"
               />
             </div>
+            <button
+              disabled={checkingDriveLink || !driveLink.trim()}
+              onClick={() => void handleCheckDriveLink()}
+              className="px-2 py-1 rounded bg-purple-600/80 hover:bg-purple-500 disabled:opacity-40 text-white text-[11px] font-semibold shrink-0"
+            >
+              {checkingDriveLink ? '...' : 'Check'}
+            </button>
           </div>
 
           <div className="px-2 py-1 bg-[#1b1b20] border-b border-[#2b2b34] flex items-center justify-between text-[10.5px] text-zinc-400">
             <span className="truncate">
-              {parsedDriveFolderId ? `ID: ${parsedDriveFolderId}` : 'Resumable Upload ON'}
+              {driveFolderCheck?.folderName
+                ? `📁 ${driveFolderCheck.folderName}`
+                : parsedDriveFolderId
+                ? `ID: ${parsedDriveFolderId}`
+                : 'Resumable 16MB Chunk'}
             </span>
-            <span className="text-purple-300">+ Report & 2 Thumbs</span>
+            <span className="text-purple-300 shrink-0">+ Report & 2 Thumbs</span>
           </div>
 
-          <div className="flex-1 overflow-auto p-3 flex flex-col justify-between">
-            <div className="space-y-2">
-              <div className="p-2.5 rounded-lg bg-[#141418] border border-[#2b2b34] space-y-1 text-[11.5px]">
-                <div className="font-semibold text-purple-300 flex items-center gap-1.5">
-                  <Cloud className="w-4 h-4" /> Tự động tạo ngay đầu thư mục Drive:
+          <div className="flex-1 overflow-auto">
+            {driveFolderCheck && driveFolderCheck.files.length > 0 ? (
+              <table className="w-full text-left border-collapse text-[11.5px]">
+                <thead className="sticky top-0 bg-[#202026] text-zinc-400 text-[10.5px]">
+                  <tr>
+                    <th className="py-1.5 px-2 font-semibold">File trên Drive</th>
+                    <th className="py-1.5 px-2 font-semibold">Size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {driveFolderCheck.files.map((rf) => (
+                    <tr key={rf.id} className="border-b border-white/[0.03] hover:bg-[#272730]">
+                      <td className="py-1 px-2 max-w-[160px] truncate">
+                        <div className="flex items-center gap-1.5">
+                          <FileIcon
+                            type={
+                              rf.isFolder
+                                ? 'folder'
+                                : rf.mimeType.startsWith('video/')
+                                ? 'video'
+                                : rf.mimeType.startsWith('image/')
+                                ? 'photo'
+                                : 'other'
+                            }
+                          />
+                          <span className="truncate">{rf.name}</span>
+                        </div>
+                      </td>
+                      <td className="py-1 px-2 text-zinc-400 whitespace-nowrap">
+                        {rf.isFolder ? 'Folder' : formatBytes(rf.sizeBytes)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="p-3 space-y-2">
+                <div className="p-2.5 rounded-lg bg-[#141418] border border-[#2b2b34] space-y-1 text-[11.5px]">
+                  <div className="font-semibold text-purple-300 flex items-center gap-1.5">
+                    <Cloud className="w-4 h-4" /> Tự động tạo ngay đầu thư mục Drive:
+                  </div>
+                  <div className="text-zinc-300">• 📄 `_00_BACKUP_REPORT.txt`</div>
+                  <div className="text-zinc-300">• 🖼️ `_01_FIRST_SHOT_*.jpg`</div>
+                  <div className="text-zinc-300">• 🖼️ `_02_LAST_SHOT_*.jpg`</div>
                 </div>
-                <div className="text-zinc-300">• 📄 `_00_BACKUP_REPORT.txt`</div>
-                <div className="text-zinc-300">• 🖼️ `_01_FIRST_SHOT_*.jpg`</div>
-                <div className="text-zinc-300">• 🖼️ `_02_LAST_SHOT_*.jpg`</div>
+                {driveFolderCheck?.error && (
+                  <div className="p-2.5 rounded-lg bg-red-500/15 border border-red-500/40 text-[11.5px] text-red-200">
+                    {driveFolderCheck.error}
+                  </div>
+                )}
               </div>
-              {parsedDriveFolderId && (
-                <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[11.5px] text-emerald-300">
-                  Đã nhận diện Folder ID: <code className="font-mono">{parsedDriveFolderId}</code>
-                </div>
-              )}
-            </div>
+            )}
           </div>
 
           <div className="px-2.5 py-1.5 bg-[#141418] border-t border-[#2b2b34] flex justify-between text-[11px] text-zinc-400">
-            <span>Resumable Chunked</span>
+            <span>{driveFolderCheck ? `${driveFolderCheck.files.length} mục trên Drive` : 'Resumable Chunked'}</span>
             <span className="text-purple-400">Cloud</span>
           </div>
         </section>
@@ -1409,6 +1586,7 @@ export default function App() {
         step1Progress={step1Progress}
         step2Progress={step2Progress}
         step3Progress={step3Progress}
+        step4Progress={step4Progress}
         watchStatus={watchStatus}
         activityLogs={activityLogs}
         isRunning={isRunning || isWatching}
@@ -1424,6 +1602,15 @@ export default function App() {
         targetDate={targetDate}
         driveLink={driveLink}
         mediaReport={mediaReport}
+      />
+
+      {/* GOOGLE DRIVE AUTH MODAL */}
+      <GoogleDriveAuthModal
+        open={driveAuthModalOpen}
+        onClose={() => setDriveAuthModalOpen(false)}
+        authStatus={driveAuth}
+        onAuthChanged={setDriveAuth}
+        onNotify={showToast}
       />
     </div>
   );

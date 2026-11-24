@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/components/datemismatchalert.tsx","./src/components/pipelinebar.tsx","./src/components/reportpreviewmodal.tsx","./src/types/framebackup.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/datemismatchalert.tsx","./src/components/googledriveauthmodal.tsx","./src/components/pipelinebar.tsx","./src/components/reportpreviewmodal.tsx","./src/types/framebackup.ts"],"version":"5.9.3"}

@@ -1,6 +1,6 @@
 # Lộ trình Triển khai (Project Roadmap)
 
-Trạng thái hiện tại: **Hoàn thành Phase 3 (Media Inspector Shot đầu/cuối, Thumbnail Video/RAW, Đóng gói 7z/Zip Store)** — Chuẩn bị bước vào Phase 4 (Google Drive API v3 & Resumable Upload).
+Trạng thái hiện tại: **Hoàn thành Phase 4 (Google Drive API v3 OAuth 2.0, Kiểm tra quyền Editor, Resumable Upload 16MB Chunk, Auto Report & 2 Thumbnails)** — Chuẩn bị bước vào Phase 5 (Night Mode Shutdown/Sleep, Queue/Preset & Đóng gói `.exe` / `.dmg` qua GitHub Actions).
 
 ---
 
@@ -35,11 +35,11 @@ Trạng thái hiện tại: **Hoàn thành Phase 3 (Media Inspector Shot đầu/
 
 ---
 
-## Phase 4: Google Drive API v3 & Báo cáo Drive
-- [ ] Tích hợp đăng nhập **Google OAuth 2.0** (lưu token cục bộ an toàn).
-- [ ] Tách Folder ID từ Link Google Drive & kiểm tra quyền **Editor** tức thì.
-- [ ] Xây dựng **Resumable Upload Engine** (hiển thị tốc độ MB/s, ETA, tự nối tiếp khi rớt mạng).
-- [ ] Tự động tạo & upload `_00_BACKUP_REPORT.txt` + `_01_FIRST_SHOT_*.jpg` + `_02_LAST_SHOT_*.jpg` ngay đầu thư mục Drive.
+## Phase 4: Google Drive API v3 & Báo cáo Drive ✅
+- [x] Tích hợp đăng nhập **Google OAuth 2.0** (Loopback flow + lưu token an toàn trong `userData`, tự refresh token).
+- [x] Tách Folder ID từ Link Google Drive, kiểm tra quyền **Editor** tức thì & liệt kê file trực tiếp trên Cột 4.
+- [x] Xây dựng **Resumable Upload Engine (16MB Chunk)** chịu lỗi rớt mạng (Auto-Retry + Query Offset nối tiếp).
+- [x] Tự động tạo & upload `_00_BACKUP_REPORT.txt` + `_01_FIRST_SHOT_*.jpg` + `_02_LAST_SHOT_*.jpg` ngay đầu thư mục Drive + tự dọn file nén tạm.
 
 ---
 

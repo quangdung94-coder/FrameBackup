@@ -1,5 +1,10 @@
 import { Eye, Square, Terminal } from 'lucide-react';
-import type { CopyProgressEvent, PackageProgressEvent, WatchStatusEvent } from '../types/framebackup';
+import type {
+  CopyProgressEvent,
+  DriveUploadProgressEvent,
+  PackageProgressEvent,
+  WatchStatusEvent,
+} from '../types/framebackup';
 
 export interface ActivityLogEntry {
   id: number;
@@ -14,6 +19,7 @@ interface PipelineBarProps {
   step1Progress: CopyProgressEvent | null;
   step2Progress: CopyProgressEvent | null;
   step3Progress: PackageProgressEvent | null;
+  step4Progress: DriveUploadProgressEvent | null;
   watchStatus: WatchStatusEvent | null;
   activityLogs: ActivityLogEntry[];
   isRunning: boolean;
@@ -21,10 +27,19 @@ interface PipelineBarProps {
   onOpenReportPreview: () => void;
 }
 
-function getStatusColor(status?: CopyProgressEvent['status'] | PackageProgressEvent['status']) {
+function getStatusColor(
+  status?: CopyProgressEvent['status'] | PackageProgressEvent['status'] | DriveUploadProgressEvent['status']
+) {
   if (status === 'completed') return 'text-emerald-400';
   if (status === 'error' || status === 'cancelled') return 'text-red-400';
-  if (status === 'copying' || status === 'verifying' || status === 'scanning' || status === 'packing') {
+  if (
+    status === 'copying' ||
+    status === 'verifying' ||
+    status === 'scanning' ||
+    status === 'packing' ||
+    status === 'preparing' ||
+    status === 'uploading'
+  ) {
     return 'text-blue-400';
   }
   return 'text-zinc-400';
@@ -46,12 +61,21 @@ function getPackLabel(p: PackageProgressEvent | null) {
   return `${p.percent}%`;
 }
 
+function getDriveLabel(p: DriveUploadProgressEvent | null) {
+  if (!p) return 'Chờ';
+  if (p.status === 'completed') return '100%';
+  if (p.status === 'cancelled') return 'Đã hủy';
+  if (p.status === 'error') return 'Lỗi';
+  return `${p.percent}%`;
+}
+
 export function PipelineBar({
   projectName,
   heightPx,
   step1Progress,
   step2Progress,
   step3Progress,
+  step4Progress,
   watchStatus,
   activityLogs,
   isRunning,
@@ -197,16 +221,38 @@ export function PipelineBar({
         </div>
 
         {/* Step 4 */}
-        <div className="bg-[#1a1a20] border border-[#2e2e38] rounded-lg px-3.5 py-2.5 flex flex-col gap-2">
+        <div
+          className={`bg-[#1a1a20] border rounded-lg px-3.5 py-2.5 flex flex-col gap-2 ${
+            step4Progress?.status === 'completed'
+              ? 'border-emerald-500/50 bg-emerald-950/10'
+              : step4Progress && ['preparing', 'uploading'].includes(step4Progress.status)
+              ? 'border-purple-500 bg-purple-950/15'
+              : 'border-[#2e2e38]'
+          }`}
+        >
           <div className="flex justify-between items-baseline gap-2">
             <span className="text-[13px] font-bold text-zinc-100 truncate">④ Upload Google Drive</span>
-            <span className="text-sm font-bold text-purple-300/80">Phase 4</span>
+            <span className={`text-lg font-extrabold tabular-nums ${getStatusColor(step4Progress?.status)}`}>
+              {getDriveLabel(step4Progress)}
+            </span>
           </div>
           <div className="h-2.5 bg-[#272732] rounded-full overflow-hidden">
-            <div className="h-full w-0 bg-purple-500 rounded-full" />
+            <div
+              className={`h-full rounded-full transition-all duration-200 ${
+                step4Progress?.status === 'completed' ? 'bg-emerald-500' : 'bg-purple-500'
+              }`}
+              style={{ width: `${step4Progress?.percent ?? 0}%` }}
+            />
           </div>
-          <div className="text-xs text-zinc-400 truncate">
-            Resumable Upload + _00_BACKUP_REPORT.txt + 2 Thumbs
+          <div className="flex items-center justify-between text-xs text-zinc-400 gap-2">
+            <span className="truncate">
+              {step4Progress ? step4Progress.currentFile : 'Resumable Upload + _00_BACKUP_REPORT.txt'}
+            </span>
+            {step4Progress && (
+              <span className="shrink-0 font-mono text-[11.5px] text-purple-300 font-semibold">
+                {step4Progress.filesUploaded}/{step4Progress.totalFiles} • {step4Progress.speedMBs} MB/s
+              </span>
+            )}
           </div>
         </div>
       </div>

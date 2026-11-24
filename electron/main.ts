@@ -5,6 +5,17 @@ import { detectCopyEngines } from './services/copyEngineService';
 import { cancelActiveCopy, runCopyAndVerify, type CopyVerifyRequest } from './services/copyVerifyService';
 import { listDirectoryEntries, listSystemDrives, scanFilesRecursive } from './services/diskService';
 import { safeEjectDrive } from './services/ejectService';
+import {
+  cancelDriveUpload,
+  checkDriveFolderAccess,
+  getDriveAuthStatus,
+  importOAuthCredentials,
+  initGoogleDriveStorage,
+  signInGoogleDrive,
+  signOutGoogleDrive,
+  uploadProjectToDrive,
+  type DriveUploadRequest,
+} from './services/googleDriveService';
 import { inspectAndBuildReport, type InspectReportRequest } from './services/mediaInspectorService';
 import { cancelPackaging, packageForDrive, type PackageRequest } from './services/packagingService';
 import { folderWatcher } from './services/watchService';
@@ -123,9 +134,44 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('package:cancel', () => cancelPackaging());
+
+  // Phase 4: Google Drive OAuth, Folder Check & Resumable Upload
+  ipcMain.handle('drive:getAuthStatus', async () => getDriveAuthStatus());
+
+  ipcMain.handle('drive:importCredentials', async () => {
+    if (!mainWindow) return { ok: false, message: 'Cửa sổ chính chưa sẵn sàng.' };
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: 'Chọn file Google OAuth credentials.json',
+      filters: [{ name: 'JSON Files', extensions: ['json'] }],
+      properties: ['openFile'],
+    });
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return { ok: false, message: 'Đã hủy chọn file.' };
+    }
+    return importOAuthCredentials(picked.filePaths[0]);
+  });
+
+  ipcMain.handle('drive:signIn', async () => {
+    return signInGoogleDrive(async (url) => {
+      await shell.openExternal(url);
+    });
+  });
+
+  ipcMain.handle('drive:signOut', async () => signOutGoogleDrive());
+
+  ipcMain.handle('drive:checkFolder', async (_event, urlOrId: string) => {
+    return checkDriveFolderAccess(urlOrId);
+  });
+
+  ipcMain.handle('drive:upload', async (_event, req: DriveUploadRequest) => {
+    return uploadProjectToDrive(req, (progress) => safeSend('drive:uploadProgress', progress));
+  });
+
+  ipcMain.handle('drive:cancelUpload', () => cancelDriveUpload());
 }
 
 app.whenReady().then(() => {
+  initGoogleDriveStorage(app.getPath('userData'));
   registerIpcHandlers();
   createWindow();
 
@@ -138,6 +184,7 @@ app.on('window-all-closed', async () => {
   await folderWatcher.stop();
   cancelActiveCopy();
   cancelPackaging();
+  cancelDriveUpload();
   if (powerSaveId !== null && powerSaveBlocker.isStarted(powerSaveId)) {
     powerSaveBlocker.stop(powerSaveId);
   }

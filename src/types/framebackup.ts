@@ -146,6 +146,70 @@ export interface PackageResult {
   error?: string;
 }
 
+export interface DriveAuthStatus {
+  hasCredentials: boolean;
+  signedIn: boolean;
+  email?: string;
+  displayName?: string;
+  quotaLimitBytes?: number;
+  quotaUsageBytes?: number;
+  error?: string;
+}
+
+export interface DriveRemoteFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  modifiedTime: string;
+  isFolder: boolean;
+}
+
+export interface DriveFolderCheckResult {
+  ok: boolean;
+  folderId?: string;
+  folderName?: string;
+  canEdit: boolean;
+  webViewLink?: string;
+  files: DriveRemoteFile[];
+  error?: string;
+}
+
+export interface DriveUploadItem {
+  localPath: string;
+  remoteName: string;
+  relativeSubdir?: string;
+}
+
+export interface DriveUploadRequest {
+  parentFolderId: string;
+  createProjectSubfolder?: string;
+  items: DriveUploadItem[];
+  cleanupArchivePaths?: string[];
+}
+
+export interface DriveUploadProgressEvent {
+  status: 'preparing' | 'uploading' | 'completed' | 'cancelled' | 'error';
+  currentFile: string;
+  filesUploaded: number;
+  totalFiles: number;
+  bytesUploaded: number;
+  totalBytes: number;
+  percent: number;
+  speedMBs: number;
+  error?: string;
+}
+
+export interface DriveUploadSummary {
+  success: boolean;
+  targetFolderId: string;
+  webViewLink?: string;
+  filesUploaded: number;
+  totalFiles: number;
+  totalBytes: number;
+  error?: string;
+}
+
 export interface FrameBackupBridge {
   getSystemInfo: () => Promise<SystemInfo>;
   setPreventSleep: (enabled: boolean) => Promise<boolean>;
@@ -167,6 +231,14 @@ export interface FrameBackupBridge {
   packageForDrive: (req: PackageRequest) => Promise<PackageResult>;
   cancelPackaging: () => Promise<boolean>;
   onPackageProgress: (cb: (ev: PackageProgressEvent) => void) => () => void;
+  getDriveAuthStatus: () => Promise<DriveAuthStatus>;
+  importDriveCredentials: () => Promise<{ ok: boolean; message: string }>;
+  signInGoogleDrive: () => Promise<DriveAuthStatus>;
+  signOutGoogleDrive: () => Promise<DriveAuthStatus>;
+  checkDriveFolder: (urlOrId: string) => Promise<DriveFolderCheckResult>;
+  uploadToGoogleDrive: (req: DriveUploadRequest) => Promise<DriveUploadSummary>;
+  cancelDriveUpload: () => Promise<boolean>;
+  onDriveUploadProgress: (cb: (ev: DriveUploadProgressEvent) => void) => () => void;
 }
 
 declare global {
