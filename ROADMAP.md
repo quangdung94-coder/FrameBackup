@@ -1,6 +1,8 @@
 # Lộ trình Triển khai (Project Roadmap)
 
-Trạng thái hiện tại: **Hoàn thành 100% (v1.0.0)** — Đã hoàn tất toàn bộ 5 Phase và kích hoạt GitHub Actions build song song Windows (`.exe`) & macOS (`.dmg`).
+Trạng thái hiện tại: **Đã test & Phát hành chính thức (`v1.0.5`)** — Đầy đủ bộ cài Windows (`.exe`) & macOS (`.dmg`) kèm logo **FrameBackup (FB)** đồng bộ hệ sinh thái **FramePilot**.
+
+- **Trang tải bộ cài chính thức**: https://github.com/quangdung94-coder/FrameBackup/releases/tag/v1.0.5
 
 ---
 
