@@ -11,6 +11,7 @@ import type {
 } from './services/googleDriveService';
 import type { InspectReportRequest, MediaReportResult } from './services/mediaInspectorService';
 import type { PackageProgressEvent, PackageRequest, PackageResult } from './services/packagingService';
+import type { PowerActionType } from './services/powerService';
 import type { WatchStatusEvent } from './services/watchService';
 
 export interface SystemInfo {
@@ -83,6 +84,10 @@ const api = {
     ipcRenderer.on('drive:uploadProgress', handler);
     return () => ipcRenderer.removeListener('drive:uploadProgress', handler);
   },
+
+  // Phase 5: Power Management
+  executePowerAction: (action: PowerActionType): Promise<{ ok: boolean; message: string }> =>
+    ipcRenderer.invoke('system:powerAction', action),
 };
 
 contextBridge.exposeInMainWorld('frameBackup', api);

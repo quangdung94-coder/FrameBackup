@@ -1,6 +1,6 @@
 {
   "name": "framebackup",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "FrameBackup — 4-Column Video & Photo Backup Assistant for Windows and macOS",
   "author": "quangdung94-coder",
   "main": "dist-electron/main.js",
@@ -57,12 +57,19 @@
     ],
     "win": {
       "target": [
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
       ]
     },
     "mac": {
+      "identity": null,
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        }
       ],
       "category": "public.app-category.video"
     }

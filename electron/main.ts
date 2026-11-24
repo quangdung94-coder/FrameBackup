@@ -19,6 +19,7 @@ import {
 } from './services/googleDriveService';
 import { inspectAndBuildReport, type InspectReportRequest } from './services/mediaInspectorService';
 import { cancelPackaging, packageForDrive, type PackageRequest } from './services/packagingService';
+import { executePowerAction, type PowerActionType } from './services/powerService';
 import { folderWatcher } from './services/watchService';
 
 let mainWindow: BrowserWindow | null = null;
@@ -173,6 +174,15 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('drive:cancelUpload', () => cancelDriveUpload());
+
+  // Phase 5: Power Management (Sleep / Shutdown)
+  ipcMain.handle('system:powerAction', async (_event, action: PowerActionType) => {
+    if (powerSaveId !== null && powerSaveBlocker.isStarted(powerSaveId)) {
+      powerSaveBlocker.stop(powerSaveId);
+      powerSaveId = null;
+    }
+    return executePowerAction(action);
+  });
 }
 
 app.whenReady().then(() => {

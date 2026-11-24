@@ -12,6 +12,7 @@ import {
   Folder,
   FolderOpen,
   HardDrive,
+  History,
   Link2,
   Maximize2,
   Minimize2,
@@ -19,11 +20,14 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
+  Upload,
   Zap,
 } from 'lucide-react';
 import { DateMismatchAlert, type DateGroupSummary } from './components/DateMismatchAlert';
 import { GoogleDriveAuthModal } from './components/GoogleDriveAuthModal';
+import { HistoryModal } from './components/HistoryModal';
 import { PipelineBar, type ActivityLogEntry } from './components/PipelineBar';
+import { PowerCountdownModal } from './components/PowerCountdownModal';
 import { ReportPreviewModal } from './components/ReportPreviewModal';
 import {
   formatBytes,
@@ -33,6 +37,7 @@ import {
   isTimestampMatchingTargetDate,
   parseGoogleDriveFolderId,
   sanitizeFolderName,
+  type BackupHistoryItem,
   type CopyEngineId,
   type CopyEngineOption,
   type CopyProgressEvent,
@@ -46,6 +51,7 @@ import {
   type MediaReportResult,
   type PackMode,
   type PackageProgressEvent,
+  type PowerActionType,
   type SystemInfo,
   type WatchStatusEvent,
 } from './types/framebackup';
@@ -109,6 +115,27 @@ function loadSavedNumber(key: string, fallback: number, min: number, max: number
   return fallback;
 }
 
+function loadSavedString(key: string, fallback = ''): string {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function loadSavedHistory(): BackupHistoryItem[] {
+  try {
+    const raw = localStorage.getItem('fb_backup_history');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed as BackupHistoryItem[];
+    }
+  } catch {
+    // Ignore
+  }
+  return [];
+}
+
 function formatNowClock(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -132,7 +159,9 @@ export default function App() {
       platform: 'all',
     },
   ]);
-  const [selectedCopyEngine, setSelectedCopyEngine] = useState<CopyEngineId>('builtin');
+  const [selectedCopyEngine, setSelectedCopyEngine] = useState<CopyEngineId>(
+    () => (loadSavedString('fb_copy_engine', 'builtin') as CopyEngineId) || 'builtin'
+  );
   const [expandedCol, setExpandedCol] = useState<number | null>(null);
 
   // Resizable layout & UI zoom (persisted in localStorage)
@@ -145,16 +174,16 @@ export default function App() {
   const logIdRef = useRef(0);
   const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([]);
 
-  // Column Paths & Entries
+  // Column Paths & Entries (Drive 1 & Drive 2 paths remembered per machine)
   const [cardPath, setCardPath] = useState('');
   const [cardFiles, setCardFiles] = useState<FileEntry[]>([]);
   const [cardScanning, setCardScanning] = useState(false);
   const [cardMode, setCardMode] = useState<'ingest' | 'watch'>('ingest');
 
-  const [drive1Path, setDrive1Path] = useState('');
+  const [drive1Path, setDrive1Path] = useState(() => loadSavedString('fb_drive1_path', ''));
   const [drive1Files, setDrive1Files] = useState<FileEntry[]>([]);
 
-  const [drive2Path, setDrive2Path] = useState('');
+  const [drive2Path, setDrive2Path] = useState(() => loadSavedString('fb_drive2_path', ''));
   const [drive2Files, setDrive2Files] = useState<FileEntry[]>([]);
 
   const [driveLink, setDriveLink] = useState('');
@@ -164,13 +193,23 @@ export default function App() {
   const [checkingDriveLink, setCheckingDriveLink] = useState(false);
   const [projectName, setProjectName] = useState(() => `${getTodayDateString().replace(/-/g, '.')}.New_Show`);
 
-  // Settings (Telegram removed — Drive Report + Sleep/Shutdown only)
+  // Settings (persisted per machine)
   const [targetDate, setTargetDate] = useState(getTodayDateString);
   const [overnightMode, setOvernightMode] = useState(true);
-  const [packMode, setPackMode] = useState<PackMode>('video-raw-smart');
-  const [postAction, setPostAction] = useState<'drive-report-sleep' | 'drive-report-shutdown' | 'drive-report-only'>(
-    'drive-report-sleep'
+  const [packMode, setPackMode] = useState<PackMode>(
+    () => (loadSavedString('fb_pack_mode', 'video-raw-smart') as PackMode) || 'video-raw-smart'
   );
+  const [postAction, setPostAction] = useState<'drive-report-sleep' | 'drive-report-shutdown' | 'drive-report-only'>(
+    () =>
+      (loadSavedString('fb_post_action', 'drive-report-sleep') as
+        | 'drive-report-sleep'
+        | 'drive-report-shutdown'
+        | 'drive-report-only') || 'drive-report-sleep'
+  );
+  const [postDelayMin, setPostDelayMin] = useState<number>(() => loadSavedNumber('fb_post_delay_min', 1, 1, 120));
+  const [pendingPowerAction, setPendingPowerAction] = useState<PowerActionType | null>(null);
+  const [historyItems, setHistoryItems] = useState<BackupHistoryItem[]>(loadSavedHistory);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('all');
   const [alertDismissed, setAlertDismissed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -194,6 +233,7 @@ export default function App() {
   const packModeRef = useRef(packMode);
   const driveLinkRef = useRef(driveLink);
   const driveAuthRef = useRef(driveAuth);
+  const postActionRef = useRef(postAction);
   drive1PathRef.current = drive1Path;
   drive2PathRef.current = drive2Path;
   projectNameRef.current = projectName;
@@ -201,6 +241,7 @@ export default function App() {
   packModeRef.current = packMode;
   driveLinkRef.current = driveLink;
   driveAuthRef.current = driveAuth;
+  postActionRef.current = postAction;
 
   const parsedDriveFolderId = useMemo(() => parseGoogleDriveFolderId(driveLink), [driveLink]);
 
@@ -243,10 +284,17 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem('fb_ui_scale', String(uiScale));
+      localStorage.setItem('fb_drive1_path', drive1Path);
+      localStorage.setItem('fb_drive2_path', drive2Path);
+      localStorage.setItem('fb_copy_engine', selectedCopyEngine);
+      localStorage.setItem('fb_pack_mode', packMode);
+      localStorage.setItem('fb_post_action', postAction);
+      localStorage.setItem('fb_post_delay_min', String(postDelayMin));
+      localStorage.setItem('fb_backup_history', JSON.stringify(historyItems.slice(0, 100)));
     } catch {
-      // Ignore
+      // Ignore storage errors
     }
-  }, [uiScale]);
+  }, [uiScale, drive1Path, drive2Path, selectedCopyEngine, packMode, postAction, postDelayMin, historyItems]);
 
   const startHorizontalResize = (dividerIndex: 0 | 1 | 2, e: React.MouseEvent) => {
     e.preventDefault();
@@ -337,6 +385,8 @@ export default function App() {
   useEffect(() => {
     void loadSystemData();
     if (!window.frameBackup) return;
+    if (drive1Path) void refreshDirectory(drive1Path, setDrive1Files);
+    if (drive2Path) void refreshDirectory(drive2Path, setDrive2Files);
 
     const unsubCopy = window.frameBackup.onCopyProgress((ev) => {
       if (ev.stage === 'card-to-drive1') setStep1Progress(ev);
@@ -472,10 +522,45 @@ export default function App() {
     }
   };
 
+  const recordHistoryAndTriggerPower = (entry: Omit<BackupHistoryItem, 'id' | 'completedAt'>) => {
+    const newItem: BackupHistoryItem = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      completedAt: Date.now(),
+      ...entry,
+    };
+    setHistoryItems((prev) => [newItem, ...prev.slice(0, 99)]);
+
+    if (postActionRef.current === 'drive-report-sleep') {
+      setPendingPowerAction('sleep');
+    } else if (postActionRef.current === 'drive-report-shutdown') {
+      setPendingPowerAction('shutdown');
+    }
+  };
+
+  const handleUploadOnlyFromDrive1 = async () => {
+    if (!window.frameBackup) return;
+    if (!drive1Path) {
+      showToast('Hãy chọn thư mục Show đang có trên Ổ 1 (Cột 2) trước.');
+      return;
+    }
+    const folderId = parseGoogleDriveFolderId(driveLink);
+    if (!folderId || !driveAuth.signedIn) {
+      showToast('Hãy đăng nhập Google Drive và dán Link thư mục Drive ở Cột 4 trước.');
+      return;
+    }
+    setStep3Progress(null);
+    setStep4Progress(null);
+    setMediaReport(null);
+    await window.frameBackup.setPreventSleep(true);
+    setSysInfo((prev) => ({ ...prev, preventSleepActive: true }));
+    await runStep2To4(drive1Path, 0, 0, true);
+  };
+
   const runStep2To4 = async (
     sourceOnDrive1: string,
     skippedOldFiles: number,
-    keptMismatchFiles: number
+    keptMismatchFiles: number,
+    skipStep2 = false
   ) => {
     if (!window.frameBackup) return;
     const safeShow = sanitizeFolderName(projectNameRef.current) || 'FrameBackup_Show';
@@ -483,9 +568,10 @@ export default function App() {
 
     setIsRunning(true);
     try {
-      let verifyText = 'PASSED (Ổ 1 XXHash64 100%)';
+      let verifyText = skipStep2 ? 'PASSED (Upload trực tiếp từ Ổ 1)' : 'PASSED (Ổ 1 XXHash64 100%)';
+      let didDrive2 = false;
 
-      if (d2Base) {
+      if (d2Base && !skipStep2) {
         const destOnDrive2 = joinPath(d2Base, safeShow);
         const res2 = await window.frameBackup.startCopyVerify({
           stage: 'drive1-to-drive2',
@@ -499,6 +585,7 @@ export default function App() {
           }
           return;
         }
+        didDrive2 = true;
         verifyText = `PASSED (Ổ 1 & Ổ 2: ${res2.verifiedFiles} files khớp 100%)`;
         await refreshDirectory(d2Base, setDrive2Files);
       }
@@ -577,6 +664,15 @@ export default function App() {
         if (upRes.success) {
           showToast(`✅ HOÀN TẤT 100%! Đã upload ${upRes.filesUploaded} files + Báo cáo & 2 Thumbnail lên Google Drive.`);
           void handleCheckDriveLink(driveLinkRef.current);
+          recordHistoryAndTriggerPower({
+            projectName: safeShow,
+            totalFiles: report.totalFiles,
+            totalBytes: report.totalBytes,
+            drive1Path: sourceOnDrive1,
+            drive2BackedUp: didDrive2,
+            driveUploaded: true,
+            driveWebLink: upRes.webViewLink,
+          });
         } else if (upRes.error !== 'CANCELLED') {
           showToast(`❌ Lỗi Upload Google Drive: ${upRes.error}`);
         }
@@ -587,6 +683,14 @@ export default function App() {
             ? '✅ Xong Bước 1–3! Hãy đăng nhập Google Drive ở Cột 4 để bật tự động Upload.'
             : '✅ Xong Bước 1–3 (Backup + Thumbnail + Đóng gói)! Dán Link Drive ở Cột 4 nếu muốn Upload.'
         );
+        recordHistoryAndTriggerPower({
+          projectName: safeShow,
+          totalFiles: report.totalFiles,
+          totalBytes: report.totalBytes,
+          drive1Path: sourceOnDrive1,
+          drive2BackedUp: didDrive2,
+          driveUploaded: false,
+        });
       }
     } catch (err) {
       showToast(`❌ Lỗi xử lý Bước 2–4: ${err instanceof Error ? err.message : String(err)}`);
@@ -763,7 +867,7 @@ export default function App() {
       <div className="h-10 bg-[#0d0d10] border-b border-[#2b2b34] px-4 flex items-center justify-between text-xs text-zinc-400 shrink-0">
         <div className="flex items-center gap-2.5 font-semibold text-zinc-100 min-w-0">
           <HardDrive className="w-4 h-4 text-blue-500 shrink-0" />
-          <span className="text-[13px] shrink-0">FrameBackup v0.4.0</span>
+          <span className="text-[13px] shrink-0">FrameBackup v1.0.0</span>
           <span className="text-[11px] px-2 py-0.5 rounded bg-[#23232b] border border-[#3e3e4b] text-zinc-300 shrink-0">
             {osBadge} ({sysInfo.arch})
           </span>
@@ -800,6 +904,13 @@ export default function App() {
           >
             <Moon className="w-3.5 h-3.5" />
             Prevent Sleep: {sysInfo.preventSleepActive ? 'ON' : 'OFF'}
+          </button>
+          <button
+            onClick={() => setHistoryOpen(true)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1f1f26] hover:bg-[#2a2a35] border border-[#32323d] text-zinc-200 text-xs transition"
+            title="Xem lịch sử các show đã sao lưu & link Drive"
+          >
+            <History className="w-3.5 h-3.5 text-blue-400" /> Lịch sử ({historyItems.length})
           </button>
           <button
             onClick={loadSystemData}
@@ -897,6 +1008,21 @@ export default function App() {
               <option value="drive-report-shutdown" className="bg-[#202024]">Drive Report + Shutdown</option>
               <option value="drive-report-only" className="bg-[#202024]">Chỉ tạo Drive Report</option>
             </select>
+            {postAction !== 'drive-report-only' && (
+              <div className="inline-flex items-center gap-1 pl-2 border-l border-[#2e2e38] text-xs text-zinc-300">
+                <span className="text-zinc-500">Chờ</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={120}
+                  value={postDelayMin}
+                  onChange={(e) => setPostDelayMin(Math.max(1, Math.min(120, Number(e.target.value) || 1)))}
+                  className="w-11 bg-[#1b1b22] border border-[#353542] rounded px-1.5 py-0.5 text-center text-xs text-amber-300 font-bold outline-none"
+                  title="Số phút đếm ngược trước khi Sleep/Shutdown"
+                />
+                <span className="text-zinc-500">phút</span>
+              </div>
+            )}
           </div>
 
           {isWatching ? (
@@ -1570,9 +1696,16 @@ export default function App() {
             )}
           </div>
 
-          <div className="px-2.5 py-1.5 bg-[#141418] border-t border-[#2b2b34] flex justify-between text-[11px] text-zinc-400">
+          <div className="px-2.5 py-1.5 bg-[#141418] border-t border-[#2b2b34] flex justify-between items-center text-[11px] text-zinc-400">
             <span>{driveFolderCheck ? `${driveFolderCheck.files.length} mục trên Drive` : 'Resumable Chunked'}</span>
-            <span className="text-purple-400">Cloud</span>
+            <button
+              disabled={isRunning || !driveAuth.signedIn || !parsedDriveFolderId || !drive1Path}
+              onClick={handleUploadOnlyFromDrive1}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-600/25 hover:bg-purple-600/45 disabled:opacity-35 border border-purple-500/40 text-purple-200 font-semibold transition"
+              title="Chạy riêng Bước 3 & 4 (Report + 2 Thumbnail + Upload Drive) từ thư mục đang chọn ở Ổ 1"
+            >
+              <Upload className="w-3 h-3" /> Chỉ Up từ Ổ 1
+            </button>
           </div>
         </section>
       </div>
@@ -1619,6 +1752,32 @@ export default function App() {
         authStatus={driveAuth}
         onAuthChanged={setDriveAuth}
         onNotify={showToast}
+      />
+
+      {/* BACKUP HISTORY MODAL */}
+      <HistoryModal
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        items={historyItems}
+        onClearHistory={() => {
+          setHistoryItems([]);
+          showToast('Đã xóa lịch sử sao lưu trên máy này.');
+        }}
+      />
+
+      {/* CUSTOMIZABLE POWER COUNTDOWN MODAL */}
+      <PowerCountdownModal
+        action={pendingPowerAction}
+        delayMinutes={postDelayMin}
+        onCancel={() => {
+          setPendingPowerAction(null);
+          showToast('Đã hủy hẹn giờ Sleep/Shutdown — giữ máy thức.');
+        }}
+        onExecute={async (act) => {
+          setPendingPowerAction(null);
+          const res = await window.frameBackup?.executePowerAction(act);
+          if (res && !res.ok) showToast(`❌ ${res.message}`);
+        }}
       />
     </div>
   );

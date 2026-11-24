@@ -210,6 +210,20 @@ export interface DriveUploadSummary {
   error?: string;
 }
 
+export type PowerActionType = 'sleep' | 'shutdown';
+
+export interface BackupHistoryItem {
+  id: string;
+  completedAt: number;
+  projectName: string;
+  totalFiles: number;
+  totalBytes: number;
+  drive1Path: string;
+  drive2BackedUp: boolean;
+  driveUploaded: boolean;
+  driveWebLink?: string;
+}
+
 export interface FrameBackupBridge {
   getSystemInfo: () => Promise<SystemInfo>;
   setPreventSleep: (enabled: boolean) => Promise<boolean>;
@@ -240,6 +254,7 @@ export interface FrameBackupBridge {
   uploadToGoogleDrive: (req: DriveUploadRequest) => Promise<DriveUploadSummary>;
   cancelDriveUpload: () => Promise<boolean>;
   onDriveUploadProgress: (cb: (ev: DriveUploadProgressEvent) => void) => () => void;
+  executePowerAction: (action: PowerActionType) => Promise<{ ok: boolean; message: string }>;
 }
 
 declare global {

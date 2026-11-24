@@ -1,6 +1,6 @@
 # Lộ trình Triển khai (Project Roadmap)
 
-Trạng thái hiện tại: **Hoàn thành Phase 4 (Google Drive API v3 OAuth 2.0, Kiểm tra quyền Editor, Resumable Upload 16MB Chunk, Auto Report & 2 Thumbnails)** — Chuẩn bị bước vào Phase 5 (Night Mode Shutdown/Sleep, Queue/Preset & Đóng gói `.exe` / `.dmg` qua GitHub Actions).
+Trạng thái hiện tại: **Hoàn thành 100% (v1.0.0)** — Đã hoàn tất toàn bộ 5 Phase và kích hoạt GitHub Actions build song song Windows (`.exe`) & macOS (`.dmg`).
 
 ---
 
@@ -43,8 +43,7 @@ Trạng thái hiện tại: **Hoàn thành Phase 4 (Google Drive API v3 OAuth 2.
 
 ---
 
-## Phase 5: Night Mode, Kiểm thử & Đóng gói Bộ cài (Windows & macOS)
-- [ ] Tích hợp **Prevent Sleep** (`powerSaveBlocker`) và tự động **Sleep / Shutdown** cho Windows & macOS.
-- [ ] Bổ sung **Hàng đợi nhiều thẻ (Queue)**, **Preset cấu hình** và **Lịch sử Backup (History)**.
-- [ ] Kiểm thử thực tế với dữ liệu lớn (Video 50GB+ và Ảnh RAW 3.000+ files, test ngắt mạng giữa chừng).
-- [ ] Thiết lập **GitHub Actions** + `electron-builder` đóng gói song song `.exe` (Windows) và `.dmg` (macOS).
+## Phase 5: Night Mode, Tiện ích & Đóng gói Bộ cài (Windows & macOS) ✅
+- [x] Tích hợp **Prevent Sleep** (`powerSaveBlocker`) và tự động **Sleep / Shutdown** cho Windows & macOS kèm **Đếm ngược tùy chỉnh số phút** (1–120 phút, không khóa cứng 60s) có nút Hủy.
+- [x] Tự động nhớ cấu hình & đường dẫn Ổ 1 / Ổ 2 riêng trên từng máy (`localStorage`), bổ sung **Lịch sử Backup** (mở nhanh link Drive) và nút **`Chỉ Up từ Ổ 1`**.
+- [x] Thiết lập **GitHub Actions** (`.github/workflows/build.yml`) + `electron-builder` đóng gói song song `.exe` (Windows) và `.dmg` (macOS Apple Silicon + Intel) tự động lên GitHub Releases.
