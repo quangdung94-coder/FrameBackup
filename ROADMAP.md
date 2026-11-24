@@ -1,6 +1,6 @@
 # Lộ trình Triển khai (Project Roadmap)
 
-Trạng thái hiện tại: **Đã chốt Kế hoạch & UX/UI v2 (4 cột)** — Chuẩn bị bước vào Phase 1.
+Trạng thái hiện tại: **Hoàn thành Phase 1 (Nền tảng Electron + React 4 cột)** — Chuẩn bị bước vào Phase 2 (Engine Ingest, Date Guard & Backup).
 
 ---
 
@@ -12,11 +12,11 @@ Trạng thái hiện tại: **Đã chốt Kế hoạch & UX/UI v2 (4 cột)** �
 
 ---
 
-## Phase 1: Khởi tạo Nền tảng Electron + React (Windows & macOS)
-- [ ] Khởi tạo project **Electron + Vite + React + TypeScript + TailwindCSS**.
-- [ ] Thiết lập IPC Bridge an toàn (`preload.ts`) và cấu trúc thư mục `main/`, `workers/`, `renderer/`.
-- [ ] Chuyển đổi giao diện từ `ui-prototype.html` thành các React Component hoàn chỉnh (4 cột, nút Mở rộng, Storage Bar, Top Ribbon).
-- [ ] Tích hợp đọc danh sách ổ đĩa & dung lượng trống đa nền tảng (Windows/macOS).
+## Phase 1: Khởi tạo Nền tảng Electron + React (Windows & macOS) ✅
+- [x] Khởi tạo project **Electron + Vite + React + TypeScript + TailwindCSS**.
+- [x] Thiết lập IPC Bridge an toàn (`preload.ts`) và cấu trúc thư mục `electron/`, `src/`.
+- [x] Chuyển đổi giao diện từ `ui-prototype.html` thành các React Component hoàn chỉnh (4 cột, nút Mở rộng, Storage Bar, Top Ribbon, Hero Date Mismatch Alert, Report Preview Modal).
+- [x] Tích hợp đọc danh sách ổ đĩa & dung lượng trống đa nền tảng (Windows/macOS) + chọn thư mục thật & Prevent Sleep.
 
 ---
 
