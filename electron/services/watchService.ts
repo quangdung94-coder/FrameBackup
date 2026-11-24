@@ -1,7 +1,11 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import chokidar, { type FSWatcher } from 'chokidar';
+import type { FSWatcher } from 'chokidar';
 import { isIgnoredSystemName } from './diskService';
+
+// chokidar v4+ is pure ESM; bypass tsc CommonJS downleveling so Electron can load it cleanly
+const loadChokidar = () =>
+  (new Function('return import("chokidar")')() as Promise<typeof import('chokidar')>);
 
 export interface WatchStatusEvent {
   state: 'idle' | 'watching' | 'receiving' | 'stabilizing' | 'ready' | 'error';
@@ -66,7 +70,8 @@ class FolderWatchController {
 
     // ignoreInitial: true ensures Watch Mode only triggers on NEW incoming copy activity,
     // not pre-existing folders already stored on Drive 1.
-    this.watcher = chokidar.watch(dirPath, {
+    const chokidarMod = await loadChokidar();
+    this.watcher = chokidarMod.default.watch(dirPath, {
       persistent: true,
       ignoreInitial: true,
       depth: 8,
