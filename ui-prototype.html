@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Assistant Video & Photo Backup — UX/UI v2 (4-Column Pipeline)</title>
+  <style>
+    :root {
+      --bg-app: #121215;
+      --bg-toolbar: #1b1b20;
+      --bg-panel: #18181c;
+      --bg-card: #202026;
+      --bg-hover: #272730;
+      --bg-input: #101013;
+      --border: #2b2b34;
+      --border-strong: #3e3e4b;
+      --text-main: #f4f4f5;
+      --text-muted: #a1a1aa;
+      --text-dim: #71717a;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --green: #10b981;
+      --green-bg: rgba(16, 185, 129, 0.14);
+      --amber: #f59e0b;
+      --amber-bg: rgba(245, 158, 11, 0.15);
+      --red: #ef4444;
+      --red-bg: rgba(239, 68, 68, 0.16);
+      --purple: #8b5cf6;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background: var(--bg-app);
+      color: var(--text-main);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-size: 12.5px;
+      user-select: none;
+    }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #383844; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #525262; }
+
+    /* Titlebar */
+    .titlebar {
+      height: 32px;
+      background: #0d0d10;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+    .titlebar-left { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text-main); }
+    .badge-os {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: #23232b;
+      color: #a1a1aa;
+      border: 1px solid var(--border-strong);
+    }
+
+    /* Top Control Ribbon */
+    .toolbar {
+      background: var(--bg-toolbar);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .nav-tools { display: flex; align-items: center; gap: 6px; }
+    .tool-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 11px;
+      border-radius: 6px;
+      background: #222228;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 11.5px;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .tool-btn:hover { background: var(--bg-hover); color: var(--text-main); }
+    .tool-btn.active {
+      background: rgba(59, 130, 246, 0.16);
+      border-color: rgba(59, 130, 246, 0.45);
+      color: #93c5fd;
+    }
+    .tool-btn.warn-btn {
+      border-color: rgba(239, 68, 68, 0.45);
+      background: rgba(239, 68, 68, 0.12);
+      color: #fca5a5;
+    }
+    .tool-btn.warn-btn:hover { background: rgba(239, 68, 68, 0.22); }
+    .tool-btn svg { width: 15px; height: 15px; }
+
+    .quick-config {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .cfg-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      padding: 5px 9px;
+      border-radius: 6px;
+    }
+    .cfg-label { color: var(--text-dim); font-size: 11px; }
+    select, input[type="date"], input[type="text"] {
+      background: transparent;
+      border: none;
+      color: var(--text-main);
+      font-family: var(--font);
+      font-size: 12px;
+      outline: none;
+    }
+    select option { background: #202024; color: var(--text-main); }
+    .chk-wrap { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-muted); cursor: pointer; }
+    .chk-wrap input { accent-color: var(--accent); cursor: pointer; }
+
+    .btn-run-all {
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      border: 1px solid #60a5fa;
+      color: #fff;
+      padding: 7px 14px;
+      border-radius: 7px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+    }
+    .btn-run-all:hover { filter: brightness(1.08); }
+
+    /* PROMINENT DATE MISMATCH ALERT (HERO WARNING) */
+    .big-alert {
+      margin: 8px 10px 2px;
+      background: linear-gradient(90deg, rgba(185, 28, 28, 0.28) 0%, rgba(127, 29, 29, 0.22) 100%);
+      border: 2px solid #ef4444;
+      border-radius: 10px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      box-shadow: 0 0 24px rgba(239, 68, 68, 0.22);
+      animation: pulseBorder 2.2s infinite;
+    }
+    .big-alert.hidden { display: none; }
+    @keyframes pulseBorder {
+      0%, 100% { border-color: #ef4444; box-shadow: 0 0 18px rgba(239, 68, 68, 0.2); }
+      50% { border-color: #f87171; box-shadow: 0 0 28px rgba(239, 68, 68, 0.42); }
+    }
+    .alert-left { display: flex; align-items: flex-start; gap: 12px; }
+    .alert-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      background: #ef4444;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      flex-shrink: 0;
+    }
+    .alert-title {
+      font-size: 14.5px;
+      font-weight: 700;
+      color: #fecaca;
+      margin-bottom: 3px;
+    }
+    .alert-desc {
+      font-size: 12.5px;
+      color: #fee2e2;
+      line-height: 1.45;
+    }
+    .date-chips { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .date-chip {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-weight: 600;
+    }
+    .chip-old { background: rgba(239, 68, 68, 0.35); color: #fecaca; border: 1px solid #f87171; }
+    .chip-today { background: rgba(16, 185, 129, 0.25); color: #6ee7b7; border: 1px solid #34d399; }
+
+    .alert-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .alert-btn-row { display: flex; gap: 8px; }
+    .btn-alert-primary {
+      background: #10b981;
+      color: #052e16;
+      border: none;
+      padding: 7px 12px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn-alert-primary:hover { background: #34d399; }
+    .btn-alert-split {
+      background: #f59e0b;
+      color: #1c1917;
+      border: none;
+      padding: 7px 12px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn-alert-sec {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.25);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      cursor: pointer;
+    }
+
+    /* 4-COLUMN WORKSPACE */
+    .workspace-4col {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+      padding: 8px 10px;
+      gap: 4px;
+    }
+
+    .col-pane {
+      flex: 1;
+      min-width: 240px;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      transition: flex 0.2s;
+    }
+    .col-pane.expanded { flex: 1.8; border-color: var(--accent); }
+    .col-pane.has-alert { border-color: rgba(239, 68, 68, 0.7); }
+
+    /* Column Header */
+    .col-head {
+      padding: 8px 10px;
+      background: #141418;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .col-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .col-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 700;
+      font-size: 12.5px;
+    }
+    .step-num {
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .num-1 { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }
+    .num-2 { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59,130,246,0.4); }
+    .num-3 { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16,185,129,0.4); }
+    .num-4 { background: rgba(139, 92, 246, 0.2); color: #a78bfa; border: 1px solid rgba(139,92,246,0.4); }
+
+    .col-tools { display: flex; align-items: center; gap: 4px; }
+    .btn-xs {
+      padding: 3px 7px;
+      border-radius: 4px;
+      border: 1px solid var(--border-strong);
+      background: #23232a;
+      color: var(--text-muted);
+      font-size: 10.5px;
+      cursor: pointer;
+    }
+    .btn-xs:hover { color: #fff; background: #2e2e38; }
+
+    /* Storage Mini Bar */
+    .storage-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10.5px;
+      color: var(--text-dim);
+    }
+    .storage-bar {
+      flex: 1;
+      height: 4px;
+      background: #272730;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .storage-fill { height: 100%; border-radius: 99px; }
+
+    /* Address / Drive Bar */
+    .col-address {
+      padding: 5px 8px;
+      background: var(--bg-toolbar);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .addr-box {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 7px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+    .addr-box input, .addr-box select { width: 100%; font-size: 11px; color: var(--text-main); }
+
+    /* Sub-toolbar inside Column (Filter / Mode) */
+    .col-subbar {
+      padding: 4px 8px;
+      background: #1b1b20;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* File Table inside Column */
+    .col-list {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: auto;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 11.5px; text-align: left; }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #202026;
+      color: var(--text-dim);
+      font-weight: 600;
+      padding: 5px 8px;
+      border-bottom: 1px solid var(--border);
+      font-size: 10.5px;
+      white-space: nowrap;
+    }
+    tbody td {
+      padding: 5px 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      white-space: nowrap;
+    }
+    tbody tr:hover { background: var(--bg-hover); }
+    tbody tr.row-mismatch {
+      background: rgba(239, 68, 68, 0.16);
+      color: #fecaca;
+    }
+    tbody tr.row-mismatch td:first-child {
+      border-left: 3px solid #ef4444;
+    }
+
+    .tag {
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 600;
+      display: inline-block;
+    }
+    .tag-ok { background: var(--green-bg); color: var(--green); }
+    .tag-warn { background: #ef4444; color: #fff; }
+    .tag-sync { background: rgba(59,130,246,0.18); color: #93c5fd; }
+    .tag-wait { background: #27272f; color: #9ca3af; }
+
+    /* Column Footer */
+    .col-foot {
+      padding: 5px 9px;
+      background: #141418;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Transfer Connector Arrows Between Columns */
+    .col-connector {
+      width: 28px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .conn-btn {
+      width: 26px;
+      height: 44px;
+      border-radius: 6px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-toolbar);
+      color: var(--text-main);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      transition: all 0.15s;
+    }
+    .conn-btn:hover { background: var(--accent); border-color: var(--accent); }
+    .conn-btn.active {
+      background: rgba(59, 130, 246, 0.2);
+      border-color: var(--accent);
+      color: #60a5fa;
+    }
+
+    /* Bottom Pipeline Progress Bar */
+    .pipeline-bar {
+      background: #151519;
+      border-top: 1px solid var(--border);
+      padding: 9px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .pipeline-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    }
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .step-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .step-card.done { border-color: rgba(16, 185, 129, 0.45); }
+    .step-card.active { border-color: var(--accent); background: rgba(59,130,246,0.06); }
+    .step-head { display: flex; justify-content: space-between; font-weight: 600; font-size: 11.5px; }
+    .step-sub { font-size: 10.5px; color: var(--text-muted); }
+    .p-track { height: 5px; background: #272730; border-radius: 99px; overflow: hidden; }
+    .p-fill { height: 100%; border-radius: 99px; }
+
+    /* Modal Preview */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      padding: 20px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: #1e1e24;
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      width: 840px;
+      max-width: 100%;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .modal-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 600;
+      font-size: 13.5px;
+    }
+    .modal-body {
+      padding: 16px;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .preview-box {
+      background: #131317;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .tg-msg {
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #e2e8f0;
+    }
+    .thumb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .thumb-card { background: #0f172a; border: 1px solid #334155; border-radius: 6px; overflow: hidden; }
+    .thumb-img {
+      height: 76px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: #94a3b8;
+      background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+      position: relative;
+    }
+    .thumb-badge {
+      position: absolute; top: 4px; left: 4px;
+      background: rgba(0,0,0,0.75); padding: 1px 5px; border-radius: 3px; font-size: 9.5px; color: #fff;
+    }
+    .thumb-meta { padding: 5px 7px; font-size: 10.5px; color: #cbd5e1; }
+    .note-pre {
+      font-family: var(--mono); font-size: 11px; line-height: 1.5; color: #d1d5db;
+      white-space: pre-wrap; background: #0c0c0f; padding: 10px; border-radius: 6px; border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Titlebar -->
+  <div class="titlebar">
+    <div class="titlebar-left">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <span>Assistant Video & Photo Backup v2.0 (4-Column DIT Pipeline)</span>
+      <span class="badge-os">Windows / macOS</span>
+    </div>
+    <div>Prevent Sleep: <strong style="color: var(--green);">ON</strong> • Ngày quay: <strong>24/11/2026</strong></div>
+  </div>
+
+  <!-- Top Ribbon Toolbar -->
+  <div class="toolbar">
+    <div class="nav-tools">
+      <button class="tool-btn active">4-Column View</button>
+      <button class="tool-btn">Queue (2 thẻ)</button>
+      <button class="tool-btn">Accounts (Drive / TG)</button>
+      <button class="tool-btn" onclick="openModal()">📄 Report Preview</button>
+      <button class="tool-btn warn-btn" onclick="toggleBigAlert()">⚠️ Bật/Tắt Cảnh báo Lệch ngày</button>
+    </div>
+
+    <div class="quick-config">
+      <div class="cfg-group">
+        <span class="cfg-label">Ngày mục tiêu:</span>
+        <input type="date" value="2026-11-24" />
+        <label class="chk-wrap" title="Cho phép file chụp/quay từ 00:00 - 04:00 sáng hôm sau">
+          <input type="checkbox" checked /> Xuyên đêm
+        </label>
+      </div>
+      <div class="cfg-group">
+        <span class="cfg-label">Đóng gói Drive:</span>
+        <select>
+          <option>Video: Nguyên folder | Ảnh: Zip Store</option>
+          <option>Không nén tất cả</option>
+          <option>Zip Store tất cả (1 cục)</option>
+          <option>Nén 7z Tiêu chuẩn</option>
+        </select>
+      </div>
+      <div class="cfg-group">
+        <span class="cfg-label">Xong việc:</span>
+        <select>
+          <option>Telegram + Drive Note + Sleep</option>
+          <option>Telegram + Drive Note + Shutdown</option>
+          <option>Chỉ báo Telegram + Drive Note</option>
+        </select>
+      </div>
+      <button class="btn-run-all" onclick="alert('Kích hoạt chuỗi tự động: Thẻ nhớ ➔ Ổ 1 (Verify) ➔ Ổ 2 (Verify) ➔ Upload Drive ➔ Báo cáo & Sleep!')">
+        <span>🚀 CHẠY TOÀN BỘ CHUỖI</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- HIGH-VISIBILITY DATE MISMATCH ALERT -->
+  <div id="bigAlert" class="big-alert">
+    <div class="alert-left">
+      <div class="alert-icon">⚠️</div>
+      <div>
+        <div class="alert-title">CẢNH BÁO LỆCH NGÀY QUAY TRONG THẺ NHỚ (SD_CAM_A) — CHẶN CHÉP NHẦM!</div>
+        <div class="alert-desc">
+          Ngày mục tiêu hôm nay là <strong>24/11/2026</strong>, nhưng phát hiện trong thẻ nhớ có lẫn <strong>2 ngày quay khác nhau</strong>. Nếu chép hết dễ bị trùng dữ liệu cũ hoặc sót thẻ ngày mai format nhầm!
+        </div>
+        <div class="date-chips">
+          <span class="date-chip chip-today">✓ 24/11/2026: 138 files (82.05 GB) — ĐÚNG NGÀY</span>
+          <span class="date-chip chip-old">✕ 22/11/2026: 2 files (4.35 GB) — LỆCH 2 NGÀY</span>
+          <span class="date-chip chip-old">✕ 20/11/2026: 2 files (1.80 GB) — LỆCH 4 NGÀY</span>
+        </div>
+      </div>
+    </div>
+    <div class="alert-actions">
+      <div class="alert-btn-row">
+        <button class="btn-alert-primary" onclick="filterTodayOnly()">✅ Chỉ chép file ngày 24/11 (Bỏ ngày cũ)</button>
+        <button class="btn-alert-split" onclick="toggleBigAlert()">📂 Tách riêng từng thư mục ngày</button>
+      </div>
+      <div class="alert-btn-row" style="justify-content: flex-end;">
+        <button class="btn-alert-sec" onclick="toggleBigAlert()">Vẫn chép tất cả</button>
+        <button class="btn-alert-sec" onclick="toggleBigAlert()">Dừng kiểm tra lại</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4-COLUMN PIPELINE WORKSPACE -->
+  <div class="workspace-4col">
+
+    <!-- COLUMN 1: THẺ NHỚ (SOURCE CARD) -->
+    <div class="col-pane has-alert" id="col1">
+      <div class="col-head">
+        <div class="col-title-row">
+          <div class="col-badge">
+            <span class="step-num num-1">1</span>
+            <span>THẺ NHỚ (NGUỒN)</span>
+          </div>
+          <div class="col-tools">
+            <button class="btn-xs" onclick="toggleExpand('col1')">⤢ Mở rộng</button>
+            <button class="btn-xs" style="color:#34d399;" title="An toàn để rút thẻ sau khi Verify">⏏ Eject</button>
+          </div>
+        </div>
+        <div class="storage-row">
+          <span>SD_CAM_A (G:) • 88.2 / 128 GB</span>
+          <div class="storage-bar"><div class="storage-fill" style="width:69%; background:#f59e0b;"></div></div>
+        </div>
+      </div>
+
+      <div class="col-address">
+        <div class="addr-box">
+          <span>💳</span>
+          <select>
+            <option>G:\DCIM\100MSDCF (Sony A7S3 - 142 files)</option>
+            <option>H:\DCIM\DJI_001 (Flycam - 38 files)</option>
+            <option>Chế độ Watch (Tự kéo bằng TeraCopy)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="col-subbar">
+        <span>Chế độ: <strong>App tự Ingest + Verify</strong></span>
+        <span style="color:#fca5a5; font-weight:600;">4 file lệch ngày!</span>
+      </div>
+
+      <div class="col-list">
+        <table>
+          <thead>
+            <tr><th>File</th><th>Size</th><th>Shot Date</th><th>Check</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>🎬 C0001.MP4</td><td>4.12G</td><td>24/11 08:15</td><td><span class="tag tag-ok">Đúng ngày</span></td>
+            </tr>
+            <tr>
+              <td>🎬 C0002.MP4</td><td>6.85G</td><td>24/11 09:42</td><td><span class="tag tag-ok">Đúng ngày</span></td>
+            </tr>
+            <tr class="row-mismatch" data-old="1">
+              <td>🎬 C0891.MP4</td><td>2.40G</td><td><strong>22/11 17:20</strong></td><td><span class="tag tag-warn">LỆCH</span></td>
+            </tr>
+            <tr class="row-mismatch" data-old="1">
+              <td>🎬 C0892.MP4</td><td>1.95G</td><td><strong>22/11 17:25</strong></td><td><span class="tag tag-warn">LỆCH</span></td>
+            </tr>
+            <tr class="row-mismatch" data-old="1">
+              <td>📷 _DSC01.ARW</td><td>42M</td><td><strong>20/11 14:10</strong></td><td><span class="tag tag-warn">LỆCH</span></td>
+            </tr>
+            <tr>
+              <td>🎬 C0003.MP4</td><td>5.30G</td><td>24/11 18:50</td><td><span class="tag tag-ok">Đúng ngày</span></td>
+            </tr>
+            <tr>
+              <td>📷 _DSC1001.ARW</td><td>42.5M</td><td>24/11 14:10</td><td><span class="tag tag-ok">Đúng ngày</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="col-foot">
+        <span>142 files • 88.2 GB</span>
+        <span style="color:#fbbf24;">Sẵn sàng Ingest</span>
+      </div>
+    </div>
+
+    <!-- ARROW 1 -> 2 -->
+    <div class="col-connector">
+      <button class="conn-btn active" title="Copy & Verify: Thẻ nhớ ➔ Ổ 1">➔</button>
+    </div>
+
+    <!-- COLUMN 2: Ổ 1 (PRIMARY WORK DRIVE) -->
+    <div class="col-pane" id="col2">
+      <div class="col-head">
+        <div class="col-title-row">
+          <div class="col-badge">
+            <span class="step-num num-2">2</span>
+            <span>Ổ 1 (LÀM VIỆC)</span>
+          </div>
+          <div class="col-tools">
+            <button class="btn-xs" onclick="toggleExpand('col2')">⤢ Mở rộng</button>
+            <button class="btn-xs">📁 Đổi ổ</button>
+          </div>
+        </div>
+        <div class="storage-row">
+          <span>NVMe (I:) • Còn trống 420 GB (Đủ chứa)</span>
+          <div class="storage-bar"><div class="storage-fill" style="width:58%; background:#3b82f6;"></div></div>
+        </div>
+      </div>
+
+      <div class="col-address">
+        <div class="addr-box">
+          <span>💿</span>
+          <input type="text" value="I:\01_Project video\2026.11.24.Event_SuKien" />
+        </div>
+      </div>
+
+      <div class="col-subbar">
+        <span>Tự tách: <strong>01_Footage / 03_Image</strong></span>
+        <span style="color:var(--green);">Verify XXHash: ON</span>
+      </div>
+
+      <div class="col-list">
+        <table>
+          <thead>
+            <tr><th>File / Folder</th><th>Size</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>📁 01_Footage/</td><td>63.6G</td><td><span class="tag tag-ok">✓ Đã Verify</span></td></tr>
+            <tr><td>&nbsp;&nbsp;🎬 C0001.MP4</td><td>4.12G</td><td><span class="tag tag-ok">✓ 100%</span></td></tr>
+            <tr><td>&nbsp;&nbsp;🎬 C0002.MP4</td><td>6.85G</td><td><span class="tag tag-ok">✓ 100%</span></td></tr>
+            <tr><td>&nbsp;&nbsp;🎬 C0003.MP4</td><td>5.30G</td><td><span class="tag tag-sync">⏳ 84%</span></td></tr>
+            <tr><td>📁 03_Image/</td><td>18.4G</td><td><span class="tag tag-ok">✓ 120 RAW</span></td></tr>
+            <tr><td>&nbsp;&nbsp;📷 _DSC1001.ARW</td><td>42.5M</td><td><span class="tag tag-ok">✓ 100%</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="col-foot">
+        <span>Đang nhận: 82.05 GB</span>
+        <span style="color:#60a5fa;">310 MB/s</span>
+      </div>
+    </div>
+
+    <!-- ARROW 2 -> 3 -->
+    <div class="col-connector">
+      <button class="conn-btn active" title="Sao lưu & Verify: Ổ 1 ➔ Ổ 2">➔</button>
+    </div>
+
+    <!-- COLUMN 3: Ổ 2 (BACKUP HDD) -->
+    <div class="col-pane" id="col3">
+      <div class="col-head">
+        <div class="col-title-row">
+          <div class="col-badge">
+            <span class="step-num num-3">3</span>
+            <span>Ổ 2 (SAO LƯU)</span>
+          </div>
+          <div class="col-tools">
+            <button class="btn-xs" onclick="toggleExpand('col3')">⤢ Mở rộng</button>
+            <button class="btn-xs">📁 Đổi ổ</button>
+          </div>
+        </div>
+        <div class="storage-row">
+          <span>Backup HDD (E:) • Còn trống 2.1 TB</span>
+          <div class="storage-bar"><div class="storage-fill" style="width:45%; background:#10b981;"></div></div>
+        </div>
+      </div>
+
+      <div class="col-address">
+        <div class="addr-box">
+          <span>🗄️</span>
+          <input type="text" value="E:\Backup_2026\2026.11.24.Event_SuKien" />
+        </div>
+      </div>
+
+      <div class="col-subbar">
+        <span>Mirror 1:1 từ Ổ 1</span>
+        <span style="color:var(--green);">Chờ Ổ 1 xong</span>
+      </div>
+
+      <div class="col-list">
+        <table>
+          <thead>
+            <tr><th>File / Folder</th><th>Size</th><th>Verify</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>📁 01_Footage/</td><td>10.9G</td><td><span class="tag tag-sync">Đang copy...</span></td></tr>
+            <tr><td>&nbsp;&nbsp;🎬 C0001.MP4</td><td>4.12G</td><td><span class="tag tag-ok">✓ Khớp Hash</span></td></tr>
+            <tr><td>&nbsp;&nbsp;🎬 C0002.MP4</td><td>6.85G</td><td><span class="tag tag-ok">✓ Khớp Hash</span></td></tr>
+            <tr><td>&nbsp;&nbsp;🎬 C0003.MP4</td><td>5.30G</td><td><span class="tag tag-wait">Chờ Ổ 1</span></td></tr>
+            <tr><td>📁 03_Image/</td><td>18.4G</td><td><span class="tag tag-wait">Trong hàng đợi</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="col-foot">
+        <span>2/138 files khớp 100%</span>
+        <span style="color:#34d399;">An toàn</span>
+      </div>
+    </div>
+
+    <!-- ARROW 3 -> 4 -->
+    <div class="col-connector">
+      <button class="conn-btn active" title="Đóng gói & Upload: Ổ 2 ➔ Google Drive">➔</button>
+    </div>
+
+    <!-- COLUMN 4: GOOGLE DRIVE (CLOUD) -->
+    <div class="col-pane" id="col4">
+      <div class="col-head">
+        <div class="col-title-row">
+          <div class="col-badge">
+            <span class="step-num num-4">4</span>
+            <span>GOOGLE DRIVE</span>
+          </div>
+          <div class="col-tools">
+            <button class="btn-xs" onclick="toggleExpand('col4')">⤢ Mở rộng</button>
+            <span style="font-size:10.5px; color:var(--green); font-weight:600;">✓ Editor</span>
+          </div>
+        </div>
+        <div class="storage-row">
+          <span>TK Drive 2TB • Còn trống 1,098 GB</span>
+          <div class="storage-bar"><div class="storage-fill" style="width:45%; background:#8b5cf6;"></div></div>
+        </div>
+      </div>
+
+      <div class="col-address">
+        <div class="addr-box">
+          <span>🔗</span>
+          <input type="text" value="https://drive.google.com/drive/folders/1AbC_Event2411" />
+        </div>
+        <button class="btn-xs">Check</button>
+      </div>
+
+      <div class="col-subbar">
+        <span>Resumable Upload ON</span>
+        <span style="color:#a78bfa;">+ Auto Note & Thumbs</span>
+      </div>
+
+      <div class="col-list">
+        <table>
+          <thead>
+            <tr><th>File trên Drive</th><th>Size</th><th>Upload</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>📄 _BACKUP_REPORT.txt</td><td>4.2K</td><td><span class="tag tag-wait">Tạo cuối</span></td></tr>
+            <tr><td>📁 _report (2 Thumbs)</td><td>310K</td><td><span class="tag tag-wait">Tạo cuối</span></td></tr>
+            <tr><td>🎬 C0001.MP4</td><td>4.12G</td><td><span class="tag tag-ok">✓ Đã up</span></td></tr>
+            <tr><td>🎬 C0002.MP4</td><td>6.85G</td><td><span class="tag tag-sync">↑ 68%</span></td></tr>
+            <tr><td>📦 03_Image_Store.zip</td><td>18.4G</td><td><span class="tag tag-wait">Chờ đóng gói</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="col-foot">
+        <span>Tốc độ: 45.2 MB/s</span>
+        <span>Còn ~24 phút</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Bottom 4-Step Pipeline Progress -->
+  <div class="pipeline-bar">
+    <div class="pipeline-top">
+      <div><strong>Chuỗi hiện tại:</strong> <span style="color:#93c5fd;">2026.11.24.Event_SuKien</span> • Chế độ: Tự động nối tiếp 4 cột</div>
+      <button class="btn-xs" style="padding:4px 10px;" onclick="openModal()">👁️ Xem thử Báo cáo Telegram & Thumbnail Shot đầu/cuối</button>
+    </div>
+    <div class="steps-grid">
+      <div class="step-card active">
+        <div class="step-head"><span>① Thẻ nhớ ➔ Ổ 1</span><span style="color:#60a5fa;">84%</span></div>
+        <div class="step-sub">Đang Ingest 138 files đúng ngày (310 MB/s)</div>
+        <div class="p-track"><div class="p-fill" style="width:84%; background:var(--accent);"></div></div>
+      </div>
+      <div class="step-card active">
+        <div class="step-head"><span>② Ổ 1 ➔ Ổ 2 (Backup)</span><span style="color:#34d399;">28%</span></div>
+        <div class="step-sub">Đang chạy cuốn chiếu & Verify XXHash</div>
+        <div class="p-track"><div class="p-fill" style="width:28%; background:var(--green);"></div></div>
+      </div>
+      <div class="step-card">
+        <div class="step-head"><span>③ Đóng gói Ảnh (Zip Store)</span><span style="color:var(--text-muted);">Chờ</span></div>
+        <div class="step-sub">Gom 120 file RAW thành 1 file Zip không nén</div>
+        <div class="p-track"><div class="p-fill" style="width:0%; background:var(--amber);"></div></div>
+      </div>
+      <div class="step-card active">
+        <div class="step-head"><span>④ Upload Google Drive</span><span style="color:#a78bfa;">12%</span></div>
+        <div class="step-sub">45.2 MB/s • Resumable Upload đang chạy</div>
+        <div class="p-track"><div class="p-fill" style="width:12%; background:var(--purple);"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Report Preview Modal -->
+  <div id="reportModal" class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+    <div class="modal">
+      <div class="modal-header">
+        <span>📱 Xem trước Báo cáo Tự động (Telegram + File Note trên Google Drive)</span>
+        <button class="btn-xs" onclick="closeModal()">✕ Đóng</button>
+      </div>
+      <div class="modal-body">
+        <div class="preview-box">
+          <div style="font-size:12px; font-weight:600; color:#93c5fd;">✈️ Tin nhắn gửi về Telegram của anh</div>
+          <div class="tg-msg">
+            <strong>✅ SAO LƯU & UPLOAD HOÀN TẤT</strong><br/>
+            📁 <strong>Dự án:</strong> 2026.11.24.Event_SuKien<br/>
+            💳 <strong>Thẻ ➔ Ổ 1 ➔ Ổ 2:</strong> 138/138 files (82.05 GB) - Verify OK<br/>
+            ⚠️ <em>Đã tự lọc bỏ 4 files lệch ngày (20/11 & 22/11)</em><br/>
+            ☁️ <strong>Google Drive:</strong> Đã up xong 100%<br/>
+            ⏱ <strong>Shot đầu tiên:</strong> 24/11/2026 08:15:10 (C0001.MP4)<br/>
+            ⏱ <strong>Shot cuối cùng:</strong> 24/11/2026 18:50:41 (C0003.MP4)<br/>
+            🔗 <strong>Link:</strong> <span style="color:#60a5fa; text-decoration:underline;">drive.google.com/drive/folders/1AbC...</span><br/>
+            😴 <em>Máy tính sẽ tự động Sleep sau 60 giây.</em>
+          </div>
+          <div class="thumb-grid">
+            <div class="thumb-card">
+              <div class="thumb-img"><span class="thumb-badge">SHOT ĐẦU</span><span>[Frame C0001.MP4]</span></div>
+              <div class="thumb-meta"><strong>C0001.MP4</strong><br/>24/11/2026 • 08:15:10</div>
+            </div>
+            <div class="thumb-card">
+              <div class="thumb-img"><span class="thumb-badge">SHOT CUỐI</span><span>[Frame C0003.MP4]</span></div>
+              <div class="thumb-meta"><strong>C0003.MP4</strong><br/>24/11/2026 • 18:50:41</div>
+            </div>
+          </div>
+        </div>
+        <div class="preview-box">
+          <div style="font-size:12px; font-weight:600; color:#93c5fd;">📄 File _BACKUP_REPORT.txt trong thư mục Drive</div>
+          <div class="note-pre">=========================================
+BACKUP & UPLOAD REPORT
+Project: 2026.11.24.Event_SuKien
+Completed: 24/11/2026 19:45:10
+=========================================
+- Copied Files : 138 files (82.05 GB)
+- Skipped Old  : 4 files (20/11, 22/11)
+- Verify Ổ 1&2 : PASSED (XXHash64 100%)
+
+[TIMELINE]
+- First Shot : C0001.MP4 | 24/11/2026 08:15:10
+- Last Shot  : C0003.MP4 | 24/11/2026 18:50:41
+
+[THUMBNAILS]
+- _report/first_shot_C0001.jpg
+- _report/last_shot_C0003.jpg
+=========================================</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleBigAlert() {
+      const el = document.getElementById('bigAlert');
+      const col1 = document.getElementById('col1');
+      el.classList.toggle('hidden');
+      col1.classList.toggle('has-alert', !el.classList.contains('hidden'));
+    }
+
+    function filterTodayOnly() {
+      document.querySelectorAll('tr[data-old="1"]').forEach(tr => tr.style.display = 'none');
+      document.getElementById('bigAlert').classList.add('hidden');
+      document.getElementById('col1').classList.remove('has-alert');
+      alert('Đã lọc chỉ giữ lại 138 files đúng ngày 24/11/2026 để chép sang Ổ 1!');
+    }
+
+    function toggleExpand(colId) {
+      const target = document.getElementById(colId);
+      const isExpanded = target.classList.contains('expanded');
+      document.querySelectorAll('.col-pane').forEach(p => p.classList.remove('expanded'));
+      if (!isExpanded) target.classList.add('expanded');
+    }
+
+    function openModal() { document.getElementById('reportModal').classList.add('open'); }
+    function closeModal() { document.getElementById('reportModal').classList.remove('open'); }
+  </script>
+</body>
+</html>

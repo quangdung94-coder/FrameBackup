@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build & Distribution
+dist/
+dist-electron/
+out/
+release/
+build/
+*.exe
+*.dmg
+*.AppImage
+*.zip
+*.7z
+
+# Environment & Secrets (NEVER commit OAuth keys or Telegram tokens)
+.env
+.env.local
+.env.*.local
+credentials.json
+token.json
+google-oauth.json
+
+# Logs & Temp
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.cache/
+tmp/
+_report_tmp/
+
+# OS Files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
