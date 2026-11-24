@@ -62,13 +62,11 @@
   - Tách `Folder ID` từ link dán vào (`https://drive.google.com/drive/folders/<ID>`).
   - Gọi `files.get(fields: 'capabilities(canAddChildren)')` để kiểm tra ngay quyền **Editor** trước khi chạy.
   - Sử dụng **Resumable Upload** theo từng chunk (ví dụ 16MB–32MB) có Exponential Backoff khi rớt mạng.
-  - Khi xong toàn bộ, upload thêm `_BACKUP_REPORT.txt` và thư mục `_report/` (2 ảnh thumbnail).
+  - Khi xong toàn bộ, upload thêm `_00_BACKUP_REPORT.txt` và 2 ảnh thumbnail (`_01_FIRST_SHOT_*.jpg`, `_02_LAST_SHOT_*.jpg`) ngay đầu thư mục Drive.
 
-### 2.5. Power Management & Notifications (Windows & macOS)
+### 2.5. Power Management & Build Đa nền tảng (Windows & macOS)
 - **Prevent Sleep**: `electron.powerSaveBlocker.start('prevent-app-suspension')` khi có job đang chạy.
 - **Post-Job Action**:
   - **Windows**: Sleep (`rundll32.exe powrprof.dll,SetSuspendState 0,1,0`) / Shutdown (`shutdown /s /t 60`).
   - **macOS**: Sleep (`pmset sleepnow` hoặc `osascript -e 'tell app "System Events" to sleep'`).
-- **Notifications**:
-  - **Telegram Bot API**: `sendMediaGroup` (2 ảnh thumbnail Shot đầu/cuối) + `sendMessage` (tóm tắt báo cáo + link Drive).
-  - **Dự phòng**: Discord Webhook / SMTP Email.
+- **Đóng gói Windows & macOS**: Sử dụng `electron-builder` kết hợp **GitHub Actions** (runner macOS & Windows) ở Phase 5 để tự động xuất đồng thời `.exe` và `.dmg`.

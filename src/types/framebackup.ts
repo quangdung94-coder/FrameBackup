@@ -1,3 +1,6 @@
+export type DateSource = 'exif' | 'video-atom' | 'mtime';
+export type DateFilterMode = 'all' | 'target-only' | 'split';
+
 export interface DriveInfo {
   id: string;
   label: string;
@@ -10,10 +13,13 @@ export interface DriveInfo {
 
 export interface FileEntry {
   name: string;
+  relativePath: string;
   fullPath: string;
   isDirectory: boolean;
   sizeBytes: number;
   mtimeMs: number;
+  shotTimeMs: number;
+  dateSource: DateSource;
   mediaType: 'video' | 'photo' | 'raw' | 'folder' | 'other';
   extension: string;
 }
@@ -25,13 +31,67 @@ export interface SystemInfo {
   preventSleepActive: boolean;
 }
 
+export interface CopyVerifyRequest {
+  stage: 'card-to-drive1' | 'drive1-to-drive2';
+  sourceDir: string;
+  destDir: string;
+  targetDate?: string;
+  overnightMode?: boolean;
+  dateFilterMode?: DateFilterMode;
+}
+
+export interface CopyProgressEvent {
+  stage: 'card-to-drive1' | 'drive1-to-drive2';
+  status: 'scanning' | 'copying' | 'verifying' | 'completed' | 'cancelled' | 'error';
+  currentFile: string;
+  filesCompleted: number;
+  totalFiles: number;
+  skippedFiles: number;
+  verifiedFiles: number;
+  bytesCopied: number;
+  totalBytes: number;
+  percent: number;
+  speedMBs: number;
+  error?: string;
+}
+
+export interface CopyVerifySummary {
+  stage: 'card-to-drive1' | 'drive1-to-drive2';
+  success: boolean;
+  totalFiles: number;
+  copiedFiles: number;
+  verifiedFiles: number;
+  skippedFiles: number;
+  totalBytes: number;
+  destDir: string;
+  error?: string;
+}
+
+export interface WatchStatusEvent {
+  state: 'idle' | 'watching' | 'receiving' | 'stabilizing' | 'ready' | 'error';
+  watchDir: string;
+  fileCount: number;
+  countdownSec: number;
+  lockedFiles: number;
+  message: string;
+}
+
 export interface FrameBackupBridge {
   getSystemInfo: () => Promise<SystemInfo>;
   setPreventSleep: (enabled: boolean) => Promise<boolean>;
   listDrives: () => Promise<DriveInfo[]>;
   listDirectory: (dirPath: string) => Promise<FileEntry[]>;
+  scanRecursive: (dirPath: string) => Promise<FileEntry[]>;
   pickDirectory: (title?: string) => Promise<string | null>;
   openExternalUrl: (url: string) => Promise<void>;
+  startCopyVerify: (req: CopyVerifyRequest) => Promise<CopyVerifySummary>;
+  cancelCopy: () => Promise<boolean>;
+  onCopyProgress: (cb: (ev: CopyProgressEvent) => void) => () => void;
+  startWatch: (dirPath: string, debounceSec: number) => Promise<void>;
+  stopWatch: () => Promise<void>;
+  triggerWatchNow: () => Promise<void>;
+  onWatchStatus: (cb: (ev: WatchStatusEvent) => void) => () => void;
+  safeEject: (mountPath: string) => Promise<{ ok: boolean; message: string }>;
 }
 
 declare global {
@@ -66,22 +126,17 @@ export function formatDisplayDate(yyyyMmDd: string): string {
   return `${d}/${m}/${y}`;
 }
 
-/**
- * Checks whether a file timestamp matches the target shoot date.
- * If overnightMode is enabled, files created between 00:00 and 04:00 of the next day
- * are also considered part of the target shoot date.
- */
 export function isTimestampMatchingTargetDate(
-  mtimeMs: number,
+  shotTimeMs: number,
   targetDateStr: string,
   overnightMode: boolean
 ): boolean {
   if (!targetDateStr) return true;
-  const fileKey = formatDateKey(mtimeMs);
+  const fileKey = formatDateKey(shotTimeMs);
   if (fileKey === targetDateStr) return true;
 
   if (overnightMode) {
-    const fileDate = new Date(mtimeMs);
+    const fileDate = new Date(shotTimeMs);
     const targetStart = new Date(`${targetDateStr}T00:00:00`);
     const nextDay = new Date(targetStart.getTime() + 24 * 60 * 60 * 1000);
     const nextDayKey = formatDateKey(nextDay.getTime());

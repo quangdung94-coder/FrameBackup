@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
   Camera,
   Cloud,
   Database,
+  Eye,
   FileText,
   Film,
   Folder,
@@ -17,6 +18,7 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
+  Zap,
 } from 'lucide-react';
 import { DateMismatchAlert, type DateGroupSummary } from './components/DateMismatchAlert';
 import { PipelineBar } from './components/PipelineBar';
@@ -27,9 +29,12 @@ import {
   formatShortDate,
   isTimestampMatchingTargetDate,
   parseGoogleDriveFolderId,
+  type CopyProgressEvent,
+  type DateFilterMode,
   type DriveInfo,
   type FileEntry,
   type SystemInfo,
+  type WatchStatusEvent,
 } from './types/framebackup';
 
 function getTodayDateString(): string {
@@ -38,16 +43,21 @@ function getTodayDateString(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+function joinPath(base: string, child: string): string {
+  const sep = base.includes('\\') ? '\\' : '/';
+  return base.endsWith(sep) ? `${base}${child}` : `${base}${sep}${child}`;
+}
+
 function createDemoCardFiles(targetDate: string): FileEntry[] {
   const base = new Date(`${targetDate}T08:15:10`).getTime();
   const oldTwoDays = base - 2 * 24 * 60 * 60 * 1000;
   return [
-    { name: 'C0001_CamA.MP4', fullPath: 'DEMO/C0001_CamA.MP4', isDirectory: false, sizeBytes: 4.12 * 1024 ** 3, mtimeMs: base, mediaType: 'video', extension: '.mp4' },
-    { name: 'C0002_CamA.MP4', fullPath: 'DEMO/C0002_CamA.MP4', isDirectory: false, sizeBytes: 6.85 * 1024 ** 3, mtimeMs: base + 5200_000, mediaType: 'video', extension: '.mp4' },
-    { name: 'C0891_OldCard.MP4', fullPath: 'DEMO/C0891_OldCard.MP4', isDirectory: false, sizeBytes: 2.4 * 1024 ** 3, mtimeMs: oldTwoDays, mediaType: 'video', extension: '.mp4' },
-    { name: '_DSC0892.ARW', fullPath: 'DEMO/_DSC0892.ARW', isDirectory: false, sizeBytes: 44 * 1024 ** 2, mtimeMs: oldTwoDays + 300_000, mediaType: 'raw', extension: '.arw' },
-    { name: 'C0003_CamA.MP4', fullPath: 'DEMO/C0003_CamA.MP4', isDirectory: false, sizeBytes: 5.3 * 1024 ** 3, mtimeMs: base + 38000_000, mediaType: 'video', extension: '.mp4' },
-    { name: '_DSC1001.ARW', fullPath: 'DEMO/_DSC1001.ARW', isDirectory: false, sizeBytes: 42.5 * 1024 ** 2, mtimeMs: base + 21000_000, mediaType: 'raw', extension: '.arw' },
+    { name: 'C0001_CamA.MP4', relativePath: 'C0001_CamA.MP4', fullPath: 'DEMO/C0001_CamA.MP4', isDirectory: false, sizeBytes: 4.12 * 1024 ** 3, mtimeMs: base, shotTimeMs: base, dateSource: 'video-atom', mediaType: 'video', extension: '.mp4' },
+    { name: 'C0002_CamA.MP4', relativePath: 'C0002_CamA.MP4', fullPath: 'DEMO/C0002_CamA.MP4', isDirectory: false, sizeBytes: 6.85 * 1024 ** 3, mtimeMs: base + 5200_000, shotTimeMs: base + 5200_000, dateSource: 'video-atom', mediaType: 'video', extension: '.mp4' },
+    { name: 'C0891_OldCard.MP4', relativePath: 'C0891_OldCard.MP4', fullPath: 'DEMO/C0891_OldCard.MP4', isDirectory: false, sizeBytes: 2.4 * 1024 ** 3, mtimeMs: oldTwoDays, shotTimeMs: oldTwoDays, dateSource: 'video-atom', mediaType: 'video', extension: '.mp4' },
+    { name: '_DSC0892.ARW', relativePath: '_DSC0892.ARW', fullPath: 'DEMO/_DSC0892.ARW', isDirectory: false, sizeBytes: 44 * 1024 ** 2, mtimeMs: oldTwoDays + 300_000, shotTimeMs: oldTwoDays + 300_000, dateSource: 'exif', mediaType: 'raw', extension: '.arw' },
+    { name: 'C0003_CamA.MP4', relativePath: 'C0003_CamA.MP4', fullPath: 'DEMO/C0003_CamA.MP4', isDirectory: false, sizeBytes: 5.3 * 1024 ** 3, mtimeMs: base + 38000_000, shotTimeMs: base + 38000_000, dateSource: 'video-atom', mediaType: 'video', extension: '.mp4' },
+    { name: '_DSC1001.ARW', relativePath: '_DSC1001.ARW', fullPath: 'DEMO/_DSC1001.ARW', isDirectory: false, sizeBytes: 42.5 * 1024 ** 2, mtimeMs: base + 21000_000, shotTimeMs: base + 21000_000, dateSource: 'exif', mediaType: 'raw', extension: '.arw' },
   ];
 }
 
@@ -82,16 +92,38 @@ export default function App() {
   const [driveLink, setDriveLink] = useState('');
   const [projectName, setProjectName] = useState(() => `${getTodayDateString().replace(/-/g, '.')}.New_Show`);
 
-  // Settings
+  // Settings (Telegram removed — Drive Report + Sleep/Shutdown only)
   const [targetDate, setTargetDate] = useState(getTodayDateString);
   const [overnightMode, setOvernightMode] = useState(true);
   const [packMode, setPackMode] = useState<'video-raw-smart' | 'none' | 'zip-store' | '7z'>('video-raw-smart');
-  const [postAction, setPostAction] = useState<'tg-note-sleep' | 'tg-note-shutdown' | 'tg-note-only'>('tg-note-sleep');
-  const [dateFilterMode, setDateFilterMode] = useState<'all' | 'target-only' | 'split'>('all');
+  const [postAction, setPostAction] = useState<'drive-report-sleep' | 'drive-report-shutdown' | 'drive-report-only'>(
+    'drive-report-sleep'
+  );
+  const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('all');
   const [alertDismissed, setAlertDismissed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
 
+  // Phase 2 Live Pipeline State
+  const [isRunning, setIsRunning] = useState(false);
+  const [step1Progress, setStep1Progress] = useState<CopyProgressEvent | null>(null);
+  const [step2Progress, setStep2Progress] = useState<CopyProgressEvent | null>(null);
+  const [watchStatus, setWatchStatus] = useState<WatchStatusEvent | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Refs for latest paths inside watch callback
+  const drive1PathRef = useRef(drive1Path);
+  const drive2PathRef = useRef(drive2Path);
+  const projectNameRef = useRef(projectName);
+  drive1PathRef.current = drive1Path;
+  drive2PathRef.current = drive2Path;
+  projectNameRef.current = projectName;
+
   const parsedDriveFolderId = useMemo(() => parseGoogleDriveFolderId(driveLink), [driveLink]);
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg((prev) => (prev === msg ? null : prev)), 5000);
+  };
 
   const loadSystemData = async () => {
     if (!window.frameBackup) return;
@@ -104,7 +136,25 @@ export default function App() {
   };
 
   useEffect(() => {
-    loadSystemData();
+    void loadSystemData();
+    if (!window.frameBackup) return;
+
+    const unsubCopy = window.frameBackup.onCopyProgress((ev) => {
+      if (ev.stage === 'card-to-drive1') setStep1Progress(ev);
+      if (ev.stage === 'drive1-to-drive2') setStep2Progress(ev);
+    });
+
+    const unsubWatch = window.frameBackup.onWatchStatus((st) => {
+      setWatchStatus(st);
+      if (st.state === 'ready') {
+        void runDrive1ToDrive2(st.watchDir);
+      }
+    });
+
+    return () => {
+      unsubCopy();
+      unsubWatch();
+    };
   }, []);
 
   const refreshDirectory = async (pathStr: string, setter: (items: FileEntry[]) => void) => {
@@ -118,7 +168,7 @@ export default function App() {
 
   const handlePickFolder = async (col: 1 | 2 | 3) => {
     if (!window.frameBackup) {
-      alert('Chức năng chọn thư mục hệ thống hoạt động khi chạy bằng Electron (npm run dev).');
+      showToast('Chức năng chọn thư mục hệ thống hoạt động khi chạy bằng Electron (npm run dev).');
       return;
     }
     const titles = {
@@ -149,6 +199,109 @@ export default function App() {
     setSysInfo((prev) => ({ ...prev, preventSleepActive: active }));
   };
 
+  const handleSafeEject = async () => {
+    if (!window.frameBackup || !cardPath) return;
+    const res = await window.frameBackup.safeEject(cardPath);
+    showToast(res.message);
+    if (res.ok) {
+      setCardPath('');
+      setCardFiles([]);
+      await loadSystemData();
+    }
+  };
+
+  const runDrive1ToDrive2 = async (sourceOnDrive1: string) => {
+    if (!window.frameBackup) return;
+    const d2Base = drive2PathRef.current;
+    if (!d2Base) {
+      showToast('Chưa chọn thư mục Ổ 2 (Sao lưu) nên chỉ hoàn tất bước 1.');
+      return;
+    }
+    setIsRunning(true);
+    const destOnDrive2 = joinPath(d2Base, projectNameRef.current);
+    const res2 = await window.frameBackup.startCopyVerify({
+      stage: 'drive1-to-drive2',
+      sourceDir: sourceOnDrive1,
+      destDir: destOnDrive2,
+    });
+    setIsRunning(false);
+    if (res2.success) {
+      showToast(`✅ Đã sao lưu & Verify 100% (${res2.verifiedFiles} files) sang Ổ 2!`);
+      await refreshDirectory(d2Base, setDrive2Files);
+      await loadSystemData();
+    } else if (res2.error !== 'CANCELLED') {
+      showToast(`❌ Lỗi Sao lưu Ổ 2: ${res2.error}`);
+    }
+  };
+
+  const handleRunFullPipeline = async () => {
+    if (!window.frameBackup) {
+      showToast('Hãy mở app bằng Electron (npm run dev) để chạy Copy & Verify thật.');
+      return;
+    }
+    if (!drive1Path) {
+      showToast('Vui lòng chọn thư mục Ổ 1 (Cột 2) trước khi chạy.');
+      return;
+    }
+
+    // Watch Mode: user copies manually into Drive 1, app watches Drive 1 then backs up to Drive 2
+    if (cardMode === 'watch') {
+      await window.frameBackup.setPreventSleep(true);
+      setSysInfo((prev) => ({ ...prev, preventSleepActive: true }));
+      await window.frameBackup.startWatch(drive1Path, 20);
+      showToast('👁 Đang bật Watch Mode tại Ổ 1 (chờ Explorer / TeraCopy / Finder chép xong)...');
+      return;
+    }
+
+    if (!cardPath || cardPath.startsWith('DEMO')) {
+      showToast('Vui lòng chọn thư mục Thẻ nhớ / Nguồn thật ở Cột 1.');
+      return;
+    }
+
+    setIsRunning(true);
+    setStep1Progress(null);
+    setStep2Progress(null);
+    await window.frameBackup.setPreventSleep(true);
+    setSysInfo((prev) => ({ ...prev, preventSleepActive: true }));
+
+    const destOnDrive1 = joinPath(drive1Path, projectName);
+    const res1 = await window.frameBackup.startCopyVerify({
+      stage: 'card-to-drive1',
+      sourceDir: cardPath,
+      destDir: destOnDrive1,
+      targetDate,
+      overnightMode,
+      dateFilterMode,
+    });
+
+    if (!res1.success) {
+      setIsRunning(false);
+      if (res1.error !== 'CANCELLED') {
+        showToast(`❌ Lỗi Ingest Ổ 1: ${res1.error}`);
+      }
+      return;
+    }
+
+    await refreshDirectory(drive1Path, setDrive1Files);
+    showToast(`✅ Xong Ổ 1 (${res1.verifiedFiles} files, bỏ qua ${res1.skippedFiles} file lệch ngày) — Đang chạy Ổ 2...`);
+
+    if (drive2Path) {
+      await runDrive1ToDrive2(destOnDrive1);
+    } else {
+      setIsRunning(false);
+      await loadSystemData();
+    }
+  };
+
+  const handleCancelAll = async () => {
+    if (!window.frameBackup) return;
+    await window.frameBackup.cancelCopy();
+    await window.frameBackup.stopWatch();
+    setWatchStatus(null);
+    setIsRunning(false);
+    showToast('Đã dừng chuỗi sao lưu.');
+  };
+
   const handleLoadDemoMismatch = () => {
     setCardPath('DEMO_SD_CARD (Dữ liệu mô phỏng)');
     setCardFiles(createDemoCardFiles(targetDate));
@@ -156,13 +309,13 @@ export default function App() {
     setAlertDismissed(false);
   };
 
-  // Date Guard analysis on Column 1 files
+  // Date Guard analysis using real EXIF / Video Atom / mtime shotTimeMs
   const dateGroups = useMemo<DateGroupSummary[]>(() => {
     const map = new Map<string, DateGroupSummary>();
     for (const f of cardFiles) {
       if (f.isDirectory) continue;
-      const isMatch = isTimestampMatchingTargetDate(f.mtimeMs, targetDate, overnightMode);
-      const key = isMatch ? targetDate : formatDateKey(f.mtimeMs);
+      const isMatch = isTimestampMatchingTargetDate(f.shotTimeMs, targetDate, overnightMode);
+      const key = isMatch ? targetDate : formatDateKey(f.shotTimeMs);
       const existing = map.get(key);
       if (existing) {
         existing.count += 1;
@@ -180,7 +333,7 @@ export default function App() {
   const displayedCardFiles = useMemo(() => {
     if (dateFilterMode !== 'target-only') return cardFiles;
     return cardFiles.filter(
-      (f) => f.isDirectory || isTimestampMatchingTargetDate(f.mtimeMs, targetDate, overnightMode)
+      (f) => f.isDirectory || isTimestampMatchingTargetDate(f.shotTimeMs, targetDate, overnightMode)
     );
   }, [cardFiles, dateFilterMode, targetDate, overnightMode]);
 
@@ -203,6 +356,7 @@ export default function App() {
   const d2Insufficient = Boolean(d2DriveInfo && totalCardBytes > 0 && d2DriveInfo.freeBytes < totalCardBytes);
 
   const osBadge = sysInfo.platform === 'darwin' ? 'macOS' : sysInfo.platform === 'win32' ? 'Windows' : sysInfo.platform;
+  const isWatching = Boolean(watchStatus && ['watching', 'receiving', 'stabilizing'].includes(watchStatus.state));
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#121215] text-zinc-100 overflow-hidden">
@@ -210,10 +364,15 @@ export default function App() {
       <div className="h-8 bg-[#0d0d10] border-b border-[#2b2b34] px-3.5 flex items-center justify-between text-[11.5px] text-zinc-400 shrink-0">
         <div className="flex items-center gap-2 font-semibold text-zinc-100">
           <HardDrive className="w-4 h-4 text-blue-500" />
-          <span>FrameBackup v0.1.0</span>
+          <span>FrameBackup v0.2.0</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#23232b] border border-[#3e3e4b] text-zinc-300">
             {osBadge} ({sysInfo.arch})
           </span>
+          {toastMsg && (
+            <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/20 border border-blue-500/40 text-blue-200 text-[11px] font-normal">
+              {toastMsg}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -302,23 +461,34 @@ export default function App() {
               onChange={(e) => setPostAction(e.target.value as typeof postAction)}
               className="bg-transparent text-xs text-zinc-100 outline-none"
             >
-              <option value="tg-note-sleep" className="bg-[#202024]">TG + Note + Sleep</option>
-              <option value="tg-note-shutdown" className="bg-[#202024]">TG + Note + Shutdown</option>
-              <option value="tg-note-only" className="bg-[#202024]">Chỉ TG + Drive Note</option>
+              <option value="drive-report-sleep" className="bg-[#202024]">Drive Report + Sleep</option>
+              <option value="drive-report-shutdown" className="bg-[#202024]">Drive Report + Shutdown</option>
+              <option value="drive-report-only" className="bg-[#202024]">Chỉ tạo Drive Report</option>
             </select>
           </div>
 
-          <button
-            onClick={() =>
-              alert(
-                'Giao diện Phase 1 đã sẵn sàng! Engine Copy + Verify (Phase 2) và Google Drive Upload (Phase 4) sẽ được đấu nối tiếp theo.'
-              )
-            }
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 hover:brightness-110 border border-blue-400/60 text-white font-semibold text-xs shadow-lg shadow-blue-950/50 transition"
-          >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            CHẠY TOÀN BỘ CHUỖI
-          </button>
+          {isWatching ? (
+            <button
+              onClick={() => window.frameBackup?.triggerWatchNow()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-amber-950 font-bold text-xs transition"
+            >
+              <Zap className="w-3.5 h-3.5 fill-current" />
+              ĐÃ CHÉP XONG — CHẠY NGAY
+            </button>
+          ) : (
+            <button
+              disabled={isRunning}
+              onClick={handleRunFullPipeline}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 hover:brightness-110 disabled:opacity-50 border border-blue-400/60 text-white font-semibold text-xs shadow-lg shadow-blue-950/50 transition"
+            >
+              {cardMode === 'watch' ? <Eye className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+              {isRunning
+                ? 'ĐANG SAO LƯU...'
+                : cardMode === 'watch'
+                ? 'BẮT ĐẦU CANH Ổ 1'
+                : 'CHẠY TOÀN BỘ CHUỖI'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -353,13 +523,23 @@ export default function App() {
                 </span>
                 <span>THẺ NHỚ (NGUỒN)</span>
               </div>
-              <button
-                onClick={() => setExpandedCol(expandedCol === 1 ? null : 1)}
-                className="p-1 rounded bg-[#23232a] hover:bg-[#2e2e38] text-zinc-400 hover:text-white"
-                title="Mở rộng / Thu gọn cột"
-              >
-                {expandedCol === 1 ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-              </button>
+              <div className="flex items-center gap-1">
+                {cardPath && !cardPath.startsWith('DEMO') && (
+                  <button
+                    onClick={handleSafeEject}
+                    className="px-1.5 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[10.5px] font-medium"
+                    title="Safe Eject thẻ nhớ"
+                  >
+                    ⏏ Eject
+                  </button>
+                )}
+                <button
+                  onClick={() => setExpandedCol(expandedCol === 1 ? null : 1)}
+                  className="p-1 rounded bg-[#23232a] hover:bg-[#2e2e38] text-zinc-400 hover:text-white"
+                >
+                  {expandedCol === 1 ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-2 text-[10.5px] text-zinc-400">
               <span className="truncate">
@@ -384,7 +564,7 @@ export default function App() {
                 setCardPath(val);
                 setAlertDismissed(false);
                 setDateFilterMode('all');
-                refreshDirectory(val, setCardFiles);
+                void refreshDirectory(val, setCardFiles);
               }}
               className="flex-1 min-w-0 bg-[#101013] border border-[#2b2b34] rounded px-2 py-1 text-[11px] text-zinc-100 outline-none"
             >
@@ -411,8 +591,9 @@ export default function App() {
             <button
               onClick={() => setCardMode(cardMode === 'ingest' ? 'watch' : 'ingest')}
               className="hover:text-zinc-200"
+              title="Bấm để đổi giữa App tự Ingest từ thẻ và Watch Mode canh Ổ 1"
             >
-              Chế độ: <strong className="text-amber-300">{cardMode === 'ingest' ? 'App tự Ingest' : 'Watch Mode'}</strong>
+              Chế độ: <strong className="text-amber-300">{cardMode === 'ingest' ? 'App tự Ingest' : 'Watch Ổ 1'}</strong>
             </button>
             <span>
               {dateFilterMode === 'target-only'
@@ -436,27 +617,27 @@ export default function App() {
                   <tr>
                     <th className="py-1.5 px-2 font-semibold">File</th>
                     <th className="py-1.5 px-2 font-semibold">Size</th>
-                    <th className="py-1.5 px-2 font-semibold">Ngày</th>
+                    <th className="py-1.5 px-2 font-semibold">Ngày gốc</th>
                   </tr>
                 </thead>
                 <tbody>
                   {displayedCardFiles.map((f) => {
                     const mismatch =
-                      !f.isDirectory && !isTimestampMatchingTargetDate(f.mtimeMs, targetDate, overnightMode);
+                      !f.isDirectory && !isTimestampMatchingTargetDate(f.shotTimeMs, targetDate, overnightMode);
                     return (
                       <tr
                         key={f.fullPath}
                         onDoubleClick={() => {
                           if (f.isDirectory) {
                             setCardPath(f.fullPath);
-                            refreshDirectory(f.fullPath, setCardFiles);
+                            void refreshDirectory(f.fullPath, setCardFiles);
                           }
                         }}
                         className={`border-b border-white/[0.03] hover:bg-[#272730] ${
                           mismatch ? 'bg-red-500/15 text-red-200 border-l-2 border-l-red-500' : ''
                         }`}
                       >
-                        <td className="py-1 px-2 max-w-[150px] truncate">
+                        <td className="py-1 px-2 max-w-[140px] truncate">
                           <div className="flex items-center gap-1.5">
                             <FileIcon type={f.mediaType} />
                             <span className="truncate">{f.name}</span>
@@ -465,13 +646,13 @@ export default function App() {
                         <td className="py-1 px-2 whitespace-nowrap text-zinc-400">
                           {f.isDirectory ? '—' : formatBytes(f.sizeBytes)}
                         </td>
-                        <td className="py-1 px-2 whitespace-nowrap">
+                        <td className="py-1 px-2 whitespace-nowrap" title={`Nguồn ngày: ${f.dateSource}`}>
                           {mismatch ? (
                             <span className="px-1.5 py-0.5 rounded bg-red-500 text-white text-[10px] font-bold">
-                              {formatShortDate(f.mtimeMs)}
+                              {formatShortDate(f.shotTimeMs)}
                             </span>
                           ) : (
-                            <span className="text-zinc-400">{formatShortDate(f.mtimeMs)}</span>
+                            <span className="text-zinc-400">{formatShortDate(f.shotTimeMs)}</span>
                           )}
                         </td>
                       </tr>
@@ -550,9 +731,9 @@ export default function App() {
           </div>
 
           <div className="px-2 py-1 bg-[#1b1b20] border-b border-[#2b2b34] flex items-center justify-between text-[10.5px] text-zinc-400">
-            <span>Tự tạo: {projectName}</span>
-            <span className="text-emerald-400 inline-flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3" /> XXHash
+            <span className="truncate">Đích: {projectName}</span>
+            <span className="text-emerald-400 inline-flex items-center gap-1 shrink-0">
+              <ShieldCheck className="w-3 h-3" /> XXHash64
             </span>
           </div>
 
@@ -577,7 +758,7 @@ export default function App() {
                       onDoubleClick={() => {
                         if (f.isDirectory) {
                           setDrive1Path(f.fullPath);
-                          refreshDirectory(f.fullPath, setDrive1Files);
+                          void refreshDirectory(f.fullPath, setDrive1Files);
                         }
                       }}
                       className="border-b border-white/[0.03] hover:bg-[#272730]"
@@ -691,7 +872,7 @@ export default function App() {
                       onDoubleClick={() => {
                         if (f.isDirectory) {
                           setDrive2Path(f.fullPath);
-                          refreshDirectory(f.fullPath, setDrive2Files);
+                          void refreshDirectory(f.fullPath, setDrive2Files);
                         }
                       }}
                       className="border-b border-white/[0.03] hover:bg-[#272730]"
@@ -747,7 +928,7 @@ export default function App() {
               </button>
             </div>
             <div className="flex items-center justify-between text-[10.5px] text-zinc-400">
-              <span>Google Drive API v3 (OAuth — Phase 4)</span>
+              <span>Google Drive API v3 (Phase 4)</span>
               <span className={parsedDriveFolderId ? 'text-emerald-400 font-semibold' : 'text-zinc-500'}>
                 {parsedDriveFolderId ? '✓ Link hợp lệ' : 'Chưa dán link'}
               </span>
@@ -771,17 +952,18 @@ export default function App() {
             <span className="truncate">
               {parsedDriveFolderId ? `ID: ${parsedDriveFolderId}` : 'Resumable Upload ON'}
             </span>
-            <span className="text-purple-300">+ Auto Note</span>
+            <span className="text-purple-300">+ Report & 2 Thumbs</span>
           </div>
 
           <div className="flex-1 overflow-auto p-3 flex flex-col justify-between">
             <div className="space-y-2">
               <div className="p-2.5 rounded-lg bg-[#141418] border border-[#2b2b34] space-y-1 text-[11.5px]">
                 <div className="font-semibold text-purple-300 flex items-center gap-1.5">
-                  <Cloud className="w-4 h-4" /> Sẽ tạo sau khi upload xong:
+                  <Cloud className="w-4 h-4" /> Tự động tạo ngay đầu thư mục Drive:
                 </div>
-                <div className="text-zinc-400">• 📄 `_BACKUP_REPORT.txt` (Log + Timeline)</div>
-                <div className="text-zinc-400">• 📁 `_report/` (2 ảnh Thumbnail Shot đầu/cuối)</div>
+                <div className="text-zinc-300">• 📄 `_00_BACKUP_REPORT.txt`</div>
+                <div className="text-zinc-300">• 🖼️ `_01_FIRST_SHOT_*.jpg`</div>
+                <div className="text-zinc-300">• 🖼️ `_02_LAST_SHOT_*.jpg`</div>
               </div>
               {parsedDriveFolderId && (
                 <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[11.5px] text-emerald-300">
@@ -799,7 +981,15 @@ export default function App() {
       </div>
 
       {/* BOTTOM PIPELINE BAR */}
-      <PipelineBar projectName={projectName} onOpenReportPreview={() => setReportOpen(true)} />
+      <PipelineBar
+        projectName={projectName}
+        step1Progress={step1Progress}
+        step2Progress={step2Progress}
+        watchStatus={watchStatus}
+        isRunning={isRunning || isWatching}
+        onCancel={handleCancelAll}
+        onOpenReportPreview={() => setReportOpen(true)}
+      />
 
       {/* REPORT PREVIEW MODAL */}
       <ReportPreviewModal

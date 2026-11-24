@@ -1,69 +1,152 @@
-import { Eye } from 'lucide-react';
+import { Eye, Square } from 'lucide-react';
+import type { CopyProgressEvent, WatchStatusEvent } from '../types/framebackup';
 
 interface PipelineBarProps {
   projectName: string;
+  step1Progress: CopyProgressEvent | null;
+  step2Progress: CopyProgressEvent | null;
+  watchStatus: WatchStatusEvent | null;
+  isRunning: boolean;
+  onCancel: () => void;
   onOpenReportPreview: () => void;
 }
 
-export function PipelineBar({ projectName, onOpenReportPreview }: PipelineBarProps) {
+function getStatusColor(status?: CopyProgressEvent['status']) {
+  if (status === 'completed') return 'text-emerald-400';
+  if (status === 'error' || status === 'cancelled') return 'text-red-400';
+  if (status === 'copying' || status === 'verifying' || status === 'scanning') return 'text-blue-400';
+  return 'text-zinc-400';
+}
+
+function getStatusLabel(p: CopyProgressEvent | null, fallback: string) {
+  if (!p) return fallback;
+  if (p.status === 'completed') return '100% OK';
+  if (p.status === 'cancelled') return 'Đã hủy';
+  if (p.status === 'error') return 'Lỗi';
+  if (p.status === 'verifying') return `Verify ${p.percent}%`;
+  return `${p.percent}%`;
+}
+
+export function PipelineBar({
+  projectName,
+  step1Progress,
+  step2Progress,
+  watchStatus,
+  isRunning,
+  onCancel,
+  onOpenReportPreview,
+}: PipelineBarProps) {
   return (
-    <div className="bg-[#151519] border-t border-[#2b2b34] px-3.5 py-2.5 flex flex-col gap-2">
-      <div className="flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
-          <span className="font-semibold text-zinc-200">Chuỗi 4 cột hiện tại:</span>
-          <span className="text-blue-300 font-medium">{projectName}</span>
-          <span className="text-zinc-500">•</span>
-          <span className="text-zinc-400">Phase 1 Foundation (Sẵn sàng kết nối Engine ở Phase 2–4)</span>
+    <div className="bg-[#151519] border-t border-[#2b2b34] px-3.5 py-2.5 flex flex-col gap-2 shrink-0">
+      <div className="flex items-center justify-between text-xs gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-semibold text-zinc-200 shrink-0">Chuỗi 4 cột:</span>
+          <span className="text-blue-300 font-medium truncate">{projectName}</span>
+          {watchStatus && watchStatus.state !== 'idle' && (
+            <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[11px] truncate">
+              👁 {watchStatus.message}
+            </span>
+          )}
         </div>
-        <button
-          onClick={onOpenReportPreview}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#23232a] hover:bg-[#2e2e38] border border-[#3e3e4b] text-zinc-200 text-[11px] transition"
-        >
-          <Eye className="w-3.5 h-3.5 text-blue-400" />
-          Xem trước Báo cáo Telegram & Thumbnail Shot đầu/cuối
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {isRunning && (
+            <button
+              onClick={onCancel}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-red-600/20 hover:bg-red-600/35 border border-red-500/50 text-red-300 text-[11px] font-semibold"
+            >
+              <Square className="w-3 h-3 fill-current" /> Dừng khẩn cấp
+            </button>
+          )}
+          <button
+            onClick={onOpenReportPreview}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#23232a] hover:bg-[#2e2e38] border border-[#3e3e4b] text-zinc-200 text-[11px] transition"
+          >
+            <Eye className="w-3.5 h-3.5 text-purple-400" />
+            Xem trước Báo cáo Drive & 2 Thumbnail
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-        <div className="bg-[#18181c] border border-[#2b2b34] rounded-md px-2.5 py-2 flex flex-col gap-1">
+        {/* Step 1 */}
+        <div
+          className={`bg-[#18181c] border rounded-md px-2.5 py-2 flex flex-col gap-1 ${
+            step1Progress?.status === 'completed'
+              ? 'border-emerald-500/45'
+              : step1Progress && ['scanning', 'copying', 'verifying'].includes(step1Progress.status)
+              ? 'border-blue-500'
+              : 'border-[#2b2b34]'
+          }`}
+        >
           <div className="flex justify-between items-center text-[11.5px] font-semibold">
             <span>① Thẻ nhớ ➔ Ổ 1</span>
-            <span className="text-amber-400">Sẵn sàng</span>
+            <span className={getStatusColor(step1Progress?.status)}>
+              {getStatusLabel(step1Progress, 'Sẵn sàng')}
+            </span>
           </div>
-          <div className="text-[10.5px] text-zinc-400">Ingest + Date Guard + XXHash64</div>
+          <div className="text-[10.5px] text-zinc-400 truncate">
+            {step1Progress
+              ? `${step1Progress.currentFile} • ${step1Progress.verifiedFiles}/${step1Progress.totalFiles} files (${step1Progress.speedMBs} MB/s)`
+              : 'Ingest + Date Guard + XXHash64'}
+          </div>
           <div className="h-1.5 bg-[#272730] rounded-full overflow-hidden">
-            <div className="h-full w-0 bg-blue-500 rounded-full" />
+            <div
+              className={`h-full rounded-full transition-all ${
+                step1Progress?.status === 'completed' ? 'bg-emerald-500' : 'bg-blue-500'
+              }`}
+              style={{ width: `${step1Progress?.percent ?? 0}%` }}
+            />
           </div>
         </div>
 
-        <div className="bg-[#18181c] border border-[#2b2b34] rounded-md px-2.5 py-2 flex flex-col gap-1">
+        {/* Step 2 */}
+        <div
+          className={`bg-[#18181c] border rounded-md px-2.5 py-2 flex flex-col gap-1 ${
+            step2Progress?.status === 'completed'
+              ? 'border-emerald-500/45'
+              : step2Progress && ['scanning', 'copying', 'verifying'].includes(step2Progress.status)
+              ? 'border-emerald-400'
+              : 'border-[#2b2b34]'
+          }`}
+        >
           <div className="flex justify-between items-center text-[11.5px] font-semibold">
             <span>② Ổ 1 ➔ Ổ 2 (Backup)</span>
-            <span className="text-zinc-400">Chờ bước 1</span>
+            <span className={getStatusColor(step2Progress?.status)}>
+              {getStatusLabel(step2Progress, 'Chờ bước 1')}
+            </span>
           </div>
-          <div className="text-[10.5px] text-zinc-400">Mirror 1:1 & Verify Checksum</div>
+          <div className="text-[10.5px] text-zinc-400 truncate">
+            {step2Progress
+              ? `${step2Progress.currentFile} • ${step2Progress.verifiedFiles}/${step2Progress.totalFiles} files (${step2Progress.speedMBs} MB/s)`
+              : 'Mirror 1:1 & Verify XXHash64'}
+          </div>
           <div className="h-1.5 bg-[#272730] rounded-full overflow-hidden">
-            <div className="h-full w-0 bg-emerald-500 rounded-full" />
+            <div
+              className="h-full bg-emerald-500 rounded-full transition-all"
+              style={{ width: `${step2Progress?.percent ?? 0}%` }}
+            />
           </div>
         </div>
 
+        {/* Step 3 */}
         <div className="bg-[#18181c] border border-[#2b2b34] rounded-md px-2.5 py-2 flex flex-col gap-1">
           <div className="flex justify-between items-center text-[11.5px] font-semibold">
             <span>③ Đóng gói & Thumbnail</span>
-            <span className="text-zinc-400">Chờ bước 2</span>
+            <span className="text-zinc-500">Phase 3</span>
           </div>
-          <div className="text-[10.5px] text-zinc-400">Zip Store (Ảnh) + Cắt 2 Thumbnail</div>
+          <div className="text-[10.5px] text-zinc-400 truncate">Zip Store (Ảnh) + Cắt 2 Thumbnail đầu/cuối</div>
           <div className="h-1.5 bg-[#272730] rounded-full overflow-hidden">
             <div className="h-full w-0 bg-amber-500 rounded-full" />
           </div>
         </div>
 
+        {/* Step 4 */}
         <div className="bg-[#18181c] border border-[#2b2b34] rounded-md px-2.5 py-2 flex flex-col gap-1">
           <div className="flex justify-between items-center text-[11.5px] font-semibold">
             <span>④ Upload Google Drive</span>
-            <span className="text-zinc-400">Chờ bước 3</span>
+            <span className="text-zinc-500">Phase 4</span>
           </div>
-          <div className="text-[10.5px] text-zinc-400">Resumable Upload + _BACKUP_REPORT.txt</div>
+          <div className="text-[10.5px] text-zinc-400 truncate">Resumable + _00_BACKUP_REPORT.txt</div>
           <div className="h-1.5 bg-[#272730] rounded-full overflow-hidden">
             <div className="h-full w-0 bg-purple-500 rounded-full" />
           </div>

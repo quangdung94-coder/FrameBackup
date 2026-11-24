@@ -1,6 +1,6 @@
 # Lộ trình Triển khai (Project Roadmap)
 
-Trạng thái hiện tại: **Hoàn thành Phase 1 (Nền tảng Electron + React 4 cột)** — Chuẩn bị bước vào Phase 2 (Engine Ingest, Date Guard & Backup).
+Trạng thái hiện tại: **Hoàn thành Phase 2 (Engine Metadata, Date Guard, Copy & Verify XXHash64, Watch Mode, Safe Eject)** — Chuẩn bị bước vào Phase 3 (Thumbnail Shot đầu/cuối & Đóng gói 7z/Zip).
 
 ---
 
@@ -20,11 +20,11 @@ Trạng thái hiện tại: **Hoàn thành Phase 1 (Nền tảng Electron + Reac
 
 ---
 
-## Phase 2: Engine Ingest, Date Guard & Backup Ổ 1 ➔ Ổ 2
-- [ ] Xây dựng module đọc Metadata ngày quay/chụp (`exifr` cho Ảnh/RAW + `ffmpeg-static` cho Video).
-- [ ] Hoàn thiện **Date Guard**: Phát hiện lệch ngày, hỗ trợ Quay xuyên đêm, 3 chế độ xử lý (Lọc đúng ngày / Tách thư mục ngày / Chép tất cả).
-- [ ] Xây dựng Worker copy tốc độ cao `Thẻ nhớ ➔ Ổ 1` và `Ổ 1 ➔ Ổ 2` kèm Verify **XXHash64**.
-- [ ] Tích hợp chế độ dự phòng **Watch Mode** (tương thích Explorer / Finder / TeraCopy) & nút **Safe Eject**.
+## Phase 2: Engine Ingest, Date Guard & Backup Ổ 1 ➔ Ổ 2 ✅
+- [x] Xây dựng module đọc Metadata ngày quay/chụp (`exifr` cho Ảnh/RAW + bộ đọc `mvhd` atom tốc độ cao cho MP4/MOV).
+- [x] Hoàn thiện **Date Guard**: Phát hiện lệch ngày, hỗ trợ Quay xuyên đêm, 3 chế độ xử lý (Lọc đúng ngày / Tách thư mục ngày / Chép tất cả).
+- [x] Xây dựng Engine copy tốc độ cao `Thẻ nhớ ➔ Ổ 1` và `Ổ 1 ➔ Ổ 2` kèm Verify **XXHash64** và thanh tiến trình trực tiếp.
+- [x] Tích hợp chế độ dự phòng **Watch Mode** (tương thích Explorer / Finder / TeraCopy) & nút **Safe Eject**.
 
 ---
 
@@ -35,17 +35,16 @@ Trạng thái hiện tại: **Hoàn thành Phase 1 (Nền tảng Electron + Reac
 
 ---
 
-## Phase 4: Google Drive API v3 & Hệ thống Báo cáo
+## Phase 4: Google Drive API v3 & Báo cáo Drive
 - [ ] Tích hợp đăng nhập **Google OAuth 2.0** (lưu token cục bộ an toàn).
 - [ ] Tách Folder ID từ Link Google Drive & kiểm tra quyền **Editor** tức thì.
 - [ ] Xây dựng **Resumable Upload Engine** (hiển thị tốc độ MB/s, ETA, tự nối tiếp khi rớt mạng).
-- [ ] Tự động tạo & upload file `_BACKUP_REPORT.txt` + `_report/` (2 thumbnails) vào thư mục Drive.
-- [ ] Tích hợp **Telegram Bot** (gửi báo cáo + 2 ảnh thumbnail) và tùy chọn dự phòng (Discord / Email).
+- [ ] Tự động tạo & upload `_00_BACKUP_REPORT.txt` + `_01_FIRST_SHOT_*.jpg` + `_02_LAST_SHOT_*.jpg` ngay đầu thư mục Drive.
 
 ---
 
-## Phase 5: Night Mode, Kiểm thử & Đóng gói Bộ cài
+## Phase 5: Night Mode, Kiểm thử & Đóng gói Bộ cài (Windows & macOS)
 - [ ] Tích hợp **Prevent Sleep** (`powerSaveBlocker`) và tự động **Sleep / Shutdown** cho Windows & macOS.
 - [ ] Bổ sung **Hàng đợi nhiều thẻ (Queue)**, **Preset cấu hình** và **Lịch sử Backup (History)**.
 - [ ] Kiểm thử thực tế với dữ liệu lớn (Video 50GB+ và Ảnh RAW 3.000+ files, test ngắt mạng giữa chừng).
-- [ ] Đóng gói bộ cài `.exe` (Windows) và `.dmg` (macOS) bằng `electron-builder`.
+- [ ] Thiết lập **GitHub Actions** + `electron-builder` đóng gói song song `.exe` (Windows) và `.dmg` (macOS).

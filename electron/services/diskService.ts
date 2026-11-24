@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { readMediaShotDate, type DateSource } from './metadataService';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,10 +18,13 @@ export interface DriveInfo {
 
 export interface FileEntry {
   name: string;
+  relativePath: string;
   fullPath: string;
   isDirectory: boolean;
   sizeBytes: number;
   mtimeMs: number;
+  shotTimeMs: number;
+  dateSource: DateSource;
   mediaType: 'video' | 'photo' | 'raw' | 'folder' | 'other';
   extension: string;
 }
@@ -28,6 +32,20 @@ export interface FileEntry {
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.mxf', '.mkv', '.avi', '.mts', '.m2ts', '.braw', '.r3d']);
 const PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.webp', '.tif', '.tiff']);
 const RAW_EXTS = new Set(['.arw', '.cr2', '.cr3', '.nef', '.raf', '.dng', '.orf', '.rw2', '.pef']);
+
+export function isIgnoredSystemName(name: string): boolean {
+  return (
+    name.startsWith('._') ||
+    name === '.DS_Store' ||
+    name === 'Thumbs.db' ||
+    name === 'Desktop.ini' ||
+    name === '$RECYCLE.BIN' ||
+    name === 'System Volume Information' ||
+    name === '.Spotlight-V100' ||
+    name === '.Trashes' ||
+    name === '.fseventsd'
+  );
+}
 
 function classifyFile(fileName: string, isDirectory: boolean): { mediaType: FileEntry['mediaType']; extension: string } {
   if (isDirectory) return { mediaType: 'folder', extension: '' };
@@ -122,34 +140,33 @@ async function listPosixDrives(): Promise<DriveInfo[]> {
   }
 }
 
-export async function listDirectoryEntries(dirPath: string): Promise<FileEntry[]> {
+export async function listDirectoryEntries(dirPath: string, readMetadata = true): Promise<FileEntry[]> {
   if (!dirPath) return [];
   try {
     const dirents = await fs.readdir(dirPath, { withFileTypes: true });
     const entries: FileEntry[] = [];
 
     for (const dirent of dirents) {
-      // Skip OS metadata/hidden junk
-      if (
-        dirent.name.startsWith('._') ||
-        dirent.name === '.DS_Store' ||
-        dirent.name === 'Thumbs.db' ||
-        dirent.name === '$RECYCLE.BIN' ||
-        dirent.name === 'System Volume Information'
-      ) {
-        continue;
-      }
+      if (isIgnoredSystemName(dirent.name)) continue;
       const fullPath = path.join(dirPath, dirent.name);
       try {
         const stat = await fs.stat(fullPath);
         const isDir = stat.isDirectory();
         const { mediaType, extension } = classifyFile(dirent.name, isDir);
+        const meta =
+          !isDir && readMetadata
+            ? await readMediaShotDate(fullPath, stat.mtimeMs)
+            : { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
+
         entries.push({
           name: dirent.name,
+          relativePath: dirent.name,
           fullPath,
           isDirectory: isDir,
           sizeBytes: isDir ? 0 : stat.size,
           mtimeMs: stat.mtimeMs,
+          shotTimeMs: meta.shotTimeMs,
+          dateSource: meta.dateSource,
           mediaType,
           extension,
         });
@@ -166,4 +183,50 @@ export async function listDirectoryEntries(dirPath: string): Promise<FileEntry[]
     console.error(`[diskService] Failed to read directory "${dirPath}":`, err);
     return [];
   }
+}
+
+export async function scanFilesRecursive(rootDir: string, readMetadata = true): Promise<FileEntry[]> {
+  const results: FileEntry[] = [];
+
+  async function walk(currentDir: string) {
+    let dirents;
+    try {
+      dirents = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const dirent of dirents) {
+      if (isIgnoredSystemName(dirent.name)) continue;
+      const fullPath = path.join(currentDir, dirent.name);
+      if (dirent.isDirectory()) {
+        await walk(fullPath);
+      } else if (dirent.isFile()) {
+        try {
+          const stat = await fs.stat(fullPath);
+          const { mediaType, extension } = classifyFile(dirent.name, false);
+          const meta = readMetadata
+            ? await readMediaShotDate(fullPath, stat.mtimeMs)
+            : { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
+
+          results.push({
+            name: dirent.name,
+            relativePath: path.relative(rootDir, fullPath),
+            fullPath,
+            isDirectory: false,
+            sizeBytes: stat.size,
+            mtimeMs: stat.mtimeMs,
+            shotTimeMs: meta.shotTimeMs,
+            dateSource: meta.dateSource,
+            mediaType,
+            extension,
+          });
+        } catch {
+          // Skip unreadable files
+        }
+      }
+    }
+  }
+
+  await walk(rootDir);
+  return results;
 }

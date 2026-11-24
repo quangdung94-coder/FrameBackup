@@ -1,14 +1,17 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, shell } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
-import { listDirectoryEntries, listSystemDrives } from './services/diskService';
+import { cancelActiveCopy, runCopyAndVerify, type CopyVerifyRequest } from './services/copyVerifyService';
+import { listDirectoryEntries, listSystemDrives, scanFilesRecursive } from './services/diskService';
+import { safeEjectDrive } from './services/ejectService';
+import { folderWatcher } from './services/watchService';
 
 let mainWindow: BrowserWindow | null = null;
 let powerSaveId: number | null = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1520,
+    width: 1540,
     height: 920,
     minWidth: 1180,
     minHeight: 720,
@@ -60,8 +63,9 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('disk:listDrives', async () => listSystemDrives());
-
-  ipcMain.handle('disk:listDirectory', async (_event, dirPath: string) => listDirectoryEntries(dirPath));
+  ipcMain.handle('disk:listDirectory', async (_event, dirPath: string) => listDirectoryEntries(dirPath, true));
+  ipcMain.handle('disk:scanRecursive', async (_event, dirPath: string) => scanFilesRecursive(dirPath, true));
+  ipcMain.handle('disk:safeEject', async (_event, mountPath: string) => safeEjectDrive(mountPath));
 
   ipcMain.handle('dialog:pickDirectory', async (_event, title?: string) => {
     if (!mainWindow) return null;
@@ -78,6 +82,30 @@ function registerIpcHandlers() {
       await shell.openExternal(url);
     }
   });
+
+  // Phase 2: Copy & Verify
+  ipcMain.handle('copy:start', async (_event, req: CopyVerifyRequest) => {
+    return runCopyAndVerify(req, (progress) => {
+      mainWindow?.webContents.send('copy:progress', progress);
+    });
+  });
+
+  ipcMain.handle('copy:cancel', () => cancelActiveCopy());
+
+  // Phase 2: Watch Mode
+  ipcMain.handle('watch:start', async (_event, dirPath: string, debounceSec: number) => {
+    await folderWatcher.start(dirPath, debounceSec, (status) => {
+      mainWindow?.webContents.send('watch:status', status);
+    });
+  });
+
+  ipcMain.handle('watch:stop', async () => {
+    await folderWatcher.stop();
+  });
+
+  ipcMain.handle('watch:triggerNow', async () => {
+    await folderWatcher.triggerNow();
+  });
 }
 
 app.whenReady().then(() => {
@@ -89,7 +117,9 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
+  await folderWatcher.stop();
+  cancelActiveCopy();
   if (powerSaveId !== null && powerSaveBlocker.isStarted(powerSaveId)) {
     powerSaveBlocker.stop(powerSaveId);
   }
