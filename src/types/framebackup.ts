@@ -216,6 +216,7 @@ export interface FrameBackupBridge {
   listDrives: () => Promise<DriveInfo[]>;
   listDirectory: (dirPath: string) => Promise<FileEntry[]>;
   scanRecursive: (dirPath: string) => Promise<FileEntry[]>;
+  ensureDirectory: (dirPath: string) => Promise<string>;
   pickDirectory: (title?: string) => Promise<string | null>;
   openExternalUrl: (url: string) => Promise<void>;
   listCopyEngines: () => Promise<CopyEngineOption[]>;

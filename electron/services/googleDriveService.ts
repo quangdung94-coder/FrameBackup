@@ -104,6 +104,10 @@ export function parseDriveFolderId(input: string): string | null {
   return null;
 }
 
+function escapeDriveQueryLiteral(str: string): string {
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 async function readStoredClient(): Promise<StoredOAuthClient | null> {
   try {
     const raw = await fsp.readFile(getCredsPath(), 'utf8');
@@ -133,8 +137,13 @@ export async function importOAuthCredentials(sourceJsonPath: string): Promise<{ 
         message: 'File JSON không hợp lệ (thiếu client_id / client_secret của Google OAuth Desktop App).',
       };
     }
+    const prevClient = await readStoredClient();
     await fsp.mkdir(userDataDir, { recursive: true });
     await fsp.writeFile(getCredsPath(), raw, 'utf8');
+    // If OAuth client_id changed, clear old token issued for previous client
+    if (prevClient && prevClient.client_id !== cfg.client_id) {
+      await fsp.unlink(getTokenPath()).catch(() => {});
+    }
     return { ok: true, message: 'Đã lưu file credentials.json thành công! Bấm "Đăng nhập Google" để kết nối.' };
   } catch (err) {
     return {
@@ -342,7 +351,7 @@ export async function checkDriveFolderAccess(folderUrlOrId: string): Promise<Dri
     const canEdit = Boolean(meta.data.capabilities?.canAddChildren);
 
     const listRes = await drive.files.list({
-      q: `'${folderId}' in parents and trashed = false`,
+      q: `'${escapeDriveQueryLiteral(folderId)}' in parents and trashed = false`,
       fields: 'files(id,name,mimeType,size,modifiedTime)',
       orderBy: 'folder,name',
       pageSize: 100,
@@ -407,9 +416,9 @@ async function ensureRemoteSubfolder(
   if (cached) return cached;
 
   const drive = google.drive({ version: 'v3', auth });
-  const escapedName = folderName.replace(/'/g, "\\'");
+  const escapedName = escapeDriveQueryLiteral(folderName);
   const existing = await drive.files.list({
-    q: `'${parentId}' in parents and name = '${escapedName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    q: `'${escapeDriveQueryLiteral(parentId)}' in parents and name = '${escapedName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
     fields: 'files(id)',
     pageSize: 1,
     supportsAllDrives: true,
@@ -470,6 +479,26 @@ async function queryResumableOffset(uploadUrl: string, totalSize: number, signal
   throw new Error(`Không thể khôi phục phiên upload (HTTP ${res.status})`);
 }
 
+async function findExistingRemoteFile(
+  auth: Auth.OAuth2Client,
+  parentId: string,
+  remoteName: string
+): Promise<{ id: string; sizeBytes: number } | null> {
+  const drive = google.drive({ version: 'v3', auth });
+  const res = await drive.files.list({
+    q: `'${escapeDriveQueryLiteral(parentId)}' in parents and name = '${escapeDriveQueryLiteral(
+      remoteName
+    )}' and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+    fields: 'files(id,size)',
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  const first = res.data.files?.[0];
+  if (!first?.id) return null;
+  return { id: first.id, sizeBytes: first.size ? Number(first.size) : -1 };
+}
+
 async function uploadSingleFileResumable(
   auth: Auth.OAuth2Client,
   localPath: string,
@@ -482,36 +511,57 @@ async function uploadSingleFileResumable(
   const totalSize = stat.size;
   const mimeType = guessMimeType(remoteName);
 
-  const tokenRes = await auth.getAccessToken();
-  const accessToken = tokenRes.token;
-  if (!accessToken) throw new Error('Không lấy được Google Access Token.');
+  // Cloud Smart Deduplication: avoid creating duplicate files on Google Drive when re-running a job
+  const isReportOrThumb =
+    remoteName === '_00_BACKUP_REPORT.txt' ||
+    remoteName.startsWith('_01_FIRST_SHOT_') ||
+    remoteName.startsWith('_02_LAST_SHOT_');
+  const existingRemote = await findExistingRemoteFile(auth, parentFolderId, remoteName);
 
-  // 1. Initiate Resumable Upload Session
-  const initRes = await fetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id',
-    {
-      method: 'POST',
+  if (existingRemote && !isReportOrThumb && existingRemote.sizeBytes === totalSize) {
+    onDeltaBytes(totalSize);
+    return existingRemote.id;
+  }
+
+  const createSessionUrl = async (): Promise<string> => {
+    const tokenRes = await auth.getAccessToken();
+    const accessToken = tokenRes.token;
+    if (!accessToken) throw new Error('Không lấy được Google Access Token.');
+
+    const endpoint =
+      existingRemote && isReportOrThumb
+        ? `https://www.googleapis.com/upload/drive/v3/files/${existingRemote.id}?uploadType=resumable&supportsAllDrives=true&fields=id`
+        : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id';
+    const method = existingRemote && isReportOrThumb ? 'PATCH' : 'POST';
+    const metadataBody =
+      method === 'PATCH'
+        ? JSON.stringify({ name: remoteName })
+        : JSON.stringify({ name: remoteName, parents: [parentFolderId] });
+
+    const initRes = await fetch(endpoint, {
+      method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json; charset=UTF-8',
         'X-Upload-Content-Type': mimeType,
         'X-Upload-Content-Length': String(totalSize),
       },
-      body: JSON.stringify({
-        name: remoteName,
-        parents: [parentFolderId],
-      }),
+      body: metadataBody,
       signal,
+    });
+
+    if (!initRes.ok) {
+      const errText = await initRes.text().catch(() => '');
+      throw new Error(`Không tạo được phiên Resumable Upload (HTTP ${initRes.status}): ${errText.slice(0, 200)}`);
     }
-  );
 
-  if (!initRes.ok) {
-    const errText = await initRes.text().catch(() => '');
-    throw new Error(`Không tạo được phiên Resumable Upload (HTTP ${initRes.status}): ${errText.slice(0, 200)}`);
-  }
+    const loc = initRes.headers.get('location');
+    if (!loc) throw new Error('Google Drive không trả về Resumable Upload URL.');
+    return loc;
+  };
 
-  const uploadUrl = initRes.headers.get('location');
-  if (!uploadUrl) throw new Error('Google Drive không trả về Resumable Upload URL.');
+  let uploadUrl = await createSessionUrl();
+  let sessionRestarts = 0;
 
   // Empty 0-byte file edge case
   if (totalSize === 0) {
@@ -574,6 +624,18 @@ async function uploadSingleFileResumable(
             const advanced = Math.max(0, nextOffset - offset);
             offset = nextOffset;
             onDeltaBytes(advanced);
+            chunkDone = true;
+            break;
+          }
+
+          // Resumable session URI expired (404 / 410 Gone) after prolonged outage -> recreate session cleanly
+          if ((putRes.status === 404 || putRes.status === 410) && sessionRestarts < 2) {
+            sessionRestarts += 1;
+            uploadUrl = await createSessionUrl();
+            if (offset > 0) {
+              onDeltaBytes(-offset);
+              offset = 0;
+            }
             chunkDone = true;
             break;
           }
@@ -726,10 +788,11 @@ export async function uploadProjectToDrive(
       filesUploaded += 1;
     }
 
-    // Optional cleanup of temporary zip/7z staging archives after 100% upload success
+    // Optional cleanup of temporary zip/7z staging archives & empty staging folder after 100% upload success
     if (req.cleanupArchivePaths) {
       for (const ap of req.cleanupArchivePaths) {
         await fsp.unlink(ap).catch(() => {});
+        await fsp.rmdir(path.dirname(ap)).catch(() => {});
       }
     }
 

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, shell } from 'electron';
 import os from 'node:os';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { detectCopyEngines } from './services/copyEngineService';
 import { cancelActiveCopy, runCopyAndVerify, type CopyVerifyRequest } from './services/copyVerifyService';
@@ -85,6 +86,10 @@ function registerIpcHandlers() {
   ipcMain.handle('disk:listDrives', async () => listSystemDrives());
   ipcMain.handle('disk:listDirectory', async (_event, dirPath: string) => listDirectoryEntries(dirPath, true));
   ipcMain.handle('disk:scanRecursive', async (_event, dirPath: string) => scanFilesRecursive(dirPath, true));
+  ipcMain.handle('disk:ensureDir', async (_event, dirPath: string) => {
+    await fs.mkdir(dirPath, { recursive: true });
+    return dirPath;
+  });
   ipcMain.handle('disk:safeEject', async (_event, mountPath: string) => safeEjectDrive(mountPath));
 
   ipcMain.handle('dialog:pickDirectory', async (_event, title?: string) => {

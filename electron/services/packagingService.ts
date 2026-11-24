@@ -82,6 +82,25 @@ async function run7za(
   });
 }
 
+async function resolveSafePackStagingDir(sourceDir: string, safeProj: string): Promise<string> {
+  // Prefer placing large .zip/.7z staging archives on the SAME drive as sourceDir (Drive 1)
+  // as a sibling folder so we never fill up a small C:\ OS drive with 100GB temp archives!
+  const resolvedSource = path.resolve(sourceDir);
+  const parentOfSource = path.dirname(resolvedSource);
+  if (parentOfSource && parentOfSource !== resolvedSource) {
+    const sameDriveStaging = path.join(parentOfSource, '.framebackup_pack_tmp', safeProj);
+    try {
+      await fsp.mkdir(sameDriveStaging, { recursive: true });
+      return sameDriveStaging;
+    } catch {
+      // Fallback to OS temp dir if parent directory is read-only
+    }
+  }
+  const fallback = path.join(os.tmpdir(), 'framebackup_staging', safeProj);
+  await fsp.mkdir(fallback, { recursive: true });
+  return fallback;
+}
+
 export async function packageForDrive(
   req: PackageRequest,
   onProgress: (ev: PackageProgressEvent) => void
@@ -92,10 +111,10 @@ export async function packageForDrive(
   const { signal } = controller;
 
   const safeProj = req.projectName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'FrameBackup_Show';
-  const stagingDir = path.join(os.tmpdir(), 'framebackup_staging', safeProj);
-  await fsp.mkdir(stagingDir, { recursive: true });
+  const stagingDir = await resolveSafePackStagingDir(req.sourceDir, safeProj);
 
   let tempListFile: string | null = null;
+  let currentArchivePath: string | null = null;
 
   try {
     onProgress({ status: 'scanning', percent: 5, message: 'Đang phân loại Video / Ảnh để đóng gói...' });
@@ -121,6 +140,7 @@ export async function packageForDrive(
 
       if (photoOrRaw.length > 0) {
         const archivePath = path.join(stagingDir, `${safeProj}_Photos_Store.zip`);
+        currentArchivePath = archivePath;
         await fsp.unlink(archivePath).catch(() => {});
         tempListFile = path.join(os.tmpdir(), `fb_pack_${Date.now()}.txt`);
         await fsp.writeFile(
@@ -173,6 +193,7 @@ export async function packageForDrive(
     // 'zip-store' or '7z' for entire folder
     const is7z = req.packMode === '7z';
     const archivePath = path.join(stagingDir, is7z ? `${safeProj}.7z` : `${safeProj}_Store.zip`);
+    currentArchivePath = archivePath;
     await fsp.unlink(archivePath).catch(() => {});
 
     const args = is7z
@@ -209,6 +230,9 @@ export async function packageForDrive(
       totalOutputBytes: st.size,
     };
   } catch (err) {
+    if (currentArchivePath) {
+      await fsp.unlink(currentArchivePath).catch(() => {});
+    }
     const message = err instanceof Error ? err.message : String(err);
     const isCancelled = message === 'CANCELLED';
     onProgress({

@@ -553,10 +553,13 @@ export default function App() {
           uploadItems.push({ localPath: ap, remoteName: baseName });
         }
 
-        // 3. Loose files (preserving relative subfolder structure)
+        // 3. Loose files (preserving relative subfolder structure, case-insensitive drive prefix on Windows)
         const normalizedRoot = sourceOnDrive1.replace(/[\\/]+$/, '');
+        const lowerRoot = normalizedRoot.toLowerCase();
         for (const fp of packRes.looseFilePaths) {
-          const rel = fp.startsWith(normalizedRoot) ? fp.slice(normalizedRoot.length).replace(/^[\\/]+/, '') : '';
+          const rel = fp.toLowerCase().startsWith(lowerRoot)
+            ? fp.slice(normalizedRoot.length).replace(/^[\\/]+/, '')
+            : '';
           const parts = rel.split(/[\\/]+/).filter(Boolean);
           const remoteName = parts.pop() || fp.split(/[\\/]/).pop() || 'file';
           const relativeSubdir = parts.length > 0 ? parts.join('/') : undefined;
@@ -608,12 +611,17 @@ export default function App() {
       return;
     }
 
-    // Watch Mode: user copies manually into Drive 1, app watches Drive 1 then backs up to Drive 2
+    // Watch Mode: scope strictly to the target Show folder so we never accidentally copy old shows in Drive 1
     if (cardMode === 'watch') {
+      const trimmedD1 = drive1Path.replace(/[\\/]+$/, '');
+      const endsWithShow = trimmedD1.toLowerCase().endsWith(safeShow.toLowerCase());
+      const watchTargetDir = endsWithShow ? trimmedD1 : joinPath(trimmedD1, safeShow);
+      await window.frameBackup.ensureDirectory(watchTargetDir);
+      await refreshDirectory(drive1Path, setDrive1Files);
       await window.frameBackup.setPreventSleep(true);
       setSysInfo((prev) => ({ ...prev, preventSleepActive: true }));
-      await window.frameBackup.startWatch(drive1Path, 20);
-      showToast('👁 Đang bật Watch Mode tại Ổ 1 (chờ Explorer / TeraCopy / Finder chép xong)...');
+      await window.frameBackup.startWatch(watchTargetDir, 20);
+      showToast(`👁 Đang canh thư mục "${watchTargetDir}" — Hãy chép file từ thẻ vào thư mục này!`);
       return;
     }
 

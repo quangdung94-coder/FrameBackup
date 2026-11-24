@@ -26,6 +26,7 @@ const api = {
   listDrives: (): Promise<DriveInfo[]> => ipcRenderer.invoke('disk:listDrives'),
   listDirectory: (dirPath: string): Promise<FileEntry[]> => ipcRenderer.invoke('disk:listDirectory', dirPath),
   scanRecursive: (dirPath: string): Promise<FileEntry[]> => ipcRenderer.invoke('disk:scanRecursive', dirPath),
+  ensureDirectory: (dirPath: string): Promise<string> => ipcRenderer.invoke('disk:ensureDir', dirPath),
   pickDirectory: (title?: string): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory', title),
   openExternalUrl: (url: string): Promise<void> => ipcRenderer.invoke('system:openExternal', url),
 

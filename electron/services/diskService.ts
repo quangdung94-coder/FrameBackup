@@ -37,6 +37,7 @@ export function isIgnoredSystemName(name: string): boolean {
   return (
     name.startsWith('._') ||
     name.endsWith('.fbpart') ||
+    name === '.framebackup_pack_tmp' ||
     name === '.DS_Store' ||
     name === 'Thumbs.db' ||
     name === 'Desktop.ini' ||

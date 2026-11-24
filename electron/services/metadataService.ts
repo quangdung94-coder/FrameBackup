@@ -34,7 +34,7 @@ async function readMp4CreationTimeMs(filePath: string): Promise<number | null> {
     const findMvhd = async (start: number, end: number): Promise<number | null> => {
       let offset = start;
       let guard = 0;
-      while (offset + 8 <= end && guard < 200) {
+      while (offset + 8 <= end && guard < 1000) {
         guard += 1;
         const { bytesRead } = await handle!.read(headerBuf, 0, 16, offset);
         if (bytesRead < 8) break;
