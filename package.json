@@ -11,8 +11,8 @@
     "build:renderer": "tsc -b && vite build",
     "build": "npm run build:renderer && npm run build:electron",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "dist:win": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac"
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never"
   },
   "dependencies": {
     "7zip-bin": "^5.2.0",
