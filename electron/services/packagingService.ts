@@ -2,8 +2,10 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { path7za } from '7zip-bin';
+import { path7za as path7zaRaw } from '7zip-bin';
 import { scanFilesRecursive } from './diskService';
+
+const path7za = path7zaRaw.replace('app.asar', 'app.asar.unpacked');
 
 export type PackMode = 'video-raw-smart' | 'none' | 'zip-store' | '7z';
 

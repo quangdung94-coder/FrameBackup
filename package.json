@@ -5,9 +5,8 @@
   "author": "quangdung94-coder",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
+    "dev": "node scripts/dev.cjs",
     "dev:vite": "vite",
-    "dev:electron": "npm run build:electron && wait-on tcp:5173 && electron .",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:renderer": "tsc -b && vite build",
     "build": "npm run build:renderer && npm run build:electron",
@@ -50,6 +49,10 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
+      "node_modules/7zip-bin/**"
     ],
     "win": {
       "target": [

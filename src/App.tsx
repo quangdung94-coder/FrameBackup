@@ -131,7 +131,8 @@ export default function App() {
   const [watchStatus, setWatchStatus] = useState<WatchStatusEvent | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // Refs for latest paths inside watch callback
+  // Refs for latest paths inside watch callback & race-condition guard
+  const cardScanSeqRef = useRef(0);
   const drive1PathRef = useRef(drive1Path);
   const drive2PathRef = useRef(drive2Path);
   const projectNameRef = useRef(projectName);
@@ -189,17 +190,35 @@ export default function App() {
     };
   }, []);
 
-  const refreshCardRecursive = async (pathStr: string) => {
+  const refreshCardSmart = async (pathStr: string, forceRecursive = false) => {
+    const seq = ++cardScanSeqRef.current;
     if (!pathStr || !window.frameBackup) {
       setCardFiles([]);
+      setCardScanning(false);
       return;
     }
+
+    // Prevent accidentally deep-scanning a huge fixed OS drive root (like C:\ or /)
+    const matchedDrive = drives.find((d) => d.mountPath.toLowerCase() === pathStr.toLowerCase());
+    const isFixedRoot = Boolean(matchedDrive && !matchedDrive.isRemovable);
+
     setCardScanning(true);
     try {
-      const items = await window.frameBackup.scanRecursive(pathStr);
-      setCardFiles(items);
+      const items =
+        isFixedRoot && !forceRecursive
+          ? await window.frameBackup.listDirectory(pathStr)
+          : await window.frameBackup.scanRecursive(pathStr);
+      if (seq === cardScanSeqRef.current) {
+        setCardFiles(items);
+      }
+    } catch (err) {
+      if (seq === cardScanSeqRef.current) {
+        showToast(`Lỗi đọc thư mục nguồn: ${err instanceof Error ? err.message : String(err)}`);
+      }
     } finally {
-      setCardScanning(false);
+      if (seq === cardScanSeqRef.current) {
+        setCardScanning(false);
+      }
     }
   };
 
@@ -228,7 +247,7 @@ export default function App() {
       setCardPath(picked);
       setAlertDismissed(false);
       setDateFilterMode('all');
-      await refreshCardRecursive(picked);
+      await refreshCardSmart(picked);
     } else if (col === 2) {
       setDrive1Path(picked);
       await refreshDirectory(picked, setDrive1Files);
@@ -266,51 +285,55 @@ export default function App() {
     const d2Base = drive2PathRef.current;
 
     setIsRunning(true);
-    let verifyText = 'PASSED (Ổ 1 XXHash64 100%)';
+    try {
+      let verifyText = 'PASSED (Ổ 1 XXHash64 100%)';
 
-    if (d2Base) {
-      const destOnDrive2 = joinPath(d2Base, safeShow);
-      const res2 = await window.frameBackup.startCopyVerify({
-        stage: 'drive1-to-drive2',
-        sourceDir: sourceOnDrive1,
-        destDir: destOnDrive2,
-        engine: selectedCopyEngineRef.current,
-      });
-      if (!res2.success) {
-        setIsRunning(false);
-        if (res2.error !== 'CANCELLED') {
-          showToast(`❌ Lỗi Sao lưu Ổ 2: ${res2.error}`);
+      if (d2Base) {
+        const destOnDrive2 = joinPath(d2Base, safeShow);
+        const res2 = await window.frameBackup.startCopyVerify({
+          stage: 'drive1-to-drive2',
+          sourceDir: sourceOnDrive1,
+          destDir: destOnDrive2,
+          engine: selectedCopyEngineRef.current,
+        });
+        if (!res2.success) {
+          if (res2.error !== 'CANCELLED') {
+            showToast(`❌ Lỗi Sao lưu Ổ 2: ${res2.error}`);
+          }
+          return;
         }
-        return;
+        verifyText = `PASSED (Ổ 1 & Ổ 2: ${res2.verifiedFiles} files khớp 100%)`;
+        await refreshDirectory(d2Base, setDrive2Files);
       }
-      verifyText = `PASSED (Ổ 1 & Ổ 2: ${res2.verifiedFiles} files khớp 100%)`;
-      await refreshDirectory(d2Base, setDrive2Files);
-    }
 
-    // Phase 3: Media Inspector (First/Last Shot + Thumbnails) & Packaging
-    setStep3Progress({ status: 'scanning', percent: 5, message: 'Đang trích xuất Thumbnail Shot đầu & cuối...' });
-    const report = await window.frameBackup.inspectAndBuildReport({
-      projectName: safeShow,
-      sourceDir: sourceOnDrive1,
-      verifyStatusText: verifyText,
-      skippedOldFiles,
-      keptMismatchFiles,
-    });
-    setMediaReport(report);
+      // Phase 3: Media Inspector (First/Last Shot + Thumbnails) & Packaging
+      setStep3Progress({ status: 'scanning', percent: 5, message: 'Đang trích xuất Thumbnail Shot đầu & cuối...' });
+      const report = await window.frameBackup.inspectAndBuildReport({
+        projectName: safeShow,
+        sourceDir: sourceOnDrive1,
+        verifyStatusText: verifyText,
+        skippedOldFiles,
+        keptMismatchFiles,
+      });
+      setMediaReport(report);
 
-    const packRes = await window.frameBackup.packageForDrive({
-      projectName: safeShow,
-      sourceDir: sourceOnDrive1,
-      packMode: packModeRef.current,
-    });
+      const packRes = await window.frameBackup.packageForDrive({
+        projectName: safeShow,
+        sourceDir: sourceOnDrive1,
+        packMode: packModeRef.current,
+      });
 
-    setIsRunning(false);
-    await loadSystemData();
+      await loadSystemData();
 
-    if (packRes.success) {
-      showToast('✅ Xong Bước 1–3 (Backup + Thumbnail + Đóng gói)! Bấm "Xem trước Báo cáo" để kiểm tra.');
-    } else if (packRes.error !== 'CANCELLED') {
-      showToast(`❌ Lỗi đóng gói: ${packRes.error}`);
+      if (packRes.success) {
+        showToast('✅ Xong Bước 1–3 (Backup + Thumbnail + Đóng gói)! Bấm "Xem trước Báo cáo" để kiểm tra.');
+      } else if (packRes.error !== 'CANCELLED') {
+        showToast(`❌ Lỗi đóng gói: ${packRes.error}`);
+      }
+    } catch (err) {
+      showToast(`❌ Lỗi xử lý Bước 2–3: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsRunning(false);
     }
   };
 
@@ -359,39 +382,45 @@ export default function App() {
     setStep2Progress(null);
     setStep3Progress(null);
     setMediaReport(null);
-    await window.frameBackup.setPreventSleep(true);
-    setSysInfo((prev) => ({ ...prev, preventSleepActive: true }));
 
-    const destOnDrive1 = joinPath(drive1Path, safeShow);
-    const res1 = await window.frameBackup.startCopyVerify({
-      stage: 'card-to-drive1',
-      sourceDir: cardPath,
-      destDir: destOnDrive1,
-      targetDate,
-      overnightMode,
-      dateFilterMode,
-      engine: selectedCopyEngine,
-    });
+    try {
+      await window.frameBackup.setPreventSleep(true);
+      setSysInfo((prev) => ({ ...prev, preventSleepActive: true }));
 
-    if (!res1.success) {
-      setIsRunning(false);
-      if (res1.error !== 'CANCELLED') {
-        showToast(`❌ Lỗi Ingest Ổ 1: ${res1.error}`);
+      const destOnDrive1 = joinPath(drive1Path, safeShow);
+      const res1 = await window.frameBackup.startCopyVerify({
+        stage: 'card-to-drive1',
+        sourceDir: cardPath,
+        destDir: destOnDrive1,
+        targetDate,
+        overnightMode,
+        dateFilterMode,
+        engine: selectedCopyEngine,
+      });
+
+      if (!res1.success) {
+        setIsRunning(false);
+        if (res1.error !== 'CANCELLED') {
+          showToast(`❌ Lỗi Ingest Ổ 1: ${res1.error}`);
+        }
+        return;
       }
-      return;
+
+      await refreshDirectory(drive1Path, setDrive1Files);
+      const resumeNote = res1.resumedFiles > 0 ? `, Resume ${res1.resumedFiles}` : '';
+      showToast(
+        `✅ Xong Ổ 1 (${res1.verifiedFiles} files${resumeNote}, lọc bỏ ${res1.skippedFiles} file lệch ngày) — Đang chạy tiếp...`
+      );
+
+      const keptMismatch =
+        dateFilterMode === 'all'
+          ? dateGroups.filter((g) => !g.isTarget).reduce((acc, g) => acc + g.count, 0)
+          : 0;
+      await runStep2And3(destOnDrive1, res1.skippedFiles, keptMismatch);
+    } catch (err) {
+      setIsRunning(false);
+      showToast(`❌ Lỗi chuỗi sao lưu: ${err instanceof Error ? err.message : String(err)}`);
     }
-
-    await refreshDirectory(drive1Path, setDrive1Files);
-    const resumeNote = res1.resumedFiles > 0 ? `, Resume ${res1.resumedFiles}` : '';
-    showToast(
-      `✅ Xong Ổ 1 (${res1.verifiedFiles} files${resumeNote}, lọc bỏ ${res1.skippedFiles} file lệch ngày) — Đang chạy tiếp...`
-    );
-
-    const keptMismatch =
-      dateFilterMode === 'all'
-        ? dateGroups.filter((g) => !g.isTarget).reduce((acc, g) => acc + g.count, 0)
-        : 0;
-    await runStep2And3(destOnDrive1, res1.skippedFiles, keptMismatch);
   };
 
   const handleCancelAll = async () => {
@@ -466,7 +495,7 @@ export default function App() {
       <div className="h-8 bg-[#0d0d10] border-b border-[#2b2b34] px-3.5 flex items-center justify-between text-[11.5px] text-zinc-400 shrink-0">
         <div className="flex items-center gap-2 font-semibold text-zinc-100">
           <HardDrive className="w-4 h-4 text-blue-500" />
-          <span>FrameBackup v0.2.0</span>
+          <span>FrameBackup v0.3.0</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#23232b] border border-[#3e3e4b] text-zinc-300">
             {osBadge} ({sysInfo.arch})
           </span>
@@ -676,6 +705,21 @@ export default function App() {
           </div>
 
           <div className="p-1.5 bg-[#1b1b20] border-b border-[#2b2b34] flex items-center gap-1">
+            {getParentDirectory(cardPath) && !cardPath.startsWith('DEMO') && (
+              <button
+                onClick={() => {
+                  const p = getParentDirectory(cardPath);
+                  if (p) {
+                    setCardPath(p);
+                    void refreshCardSmart(p);
+                  }
+                }}
+                className="px-1.5 py-1 rounded bg-[#23232a] hover:bg-[#32323c] border border-[#3e3e4b] text-zinc-300 shrink-0"
+                title="Lên thư mục cha"
+              >
+                <ArrowUp className="w-3.5 h-3.5" />
+              </button>
+            )}
             <select
               value={cardPath}
               onChange={(e) => {
@@ -683,7 +727,7 @@ export default function App() {
                 setCardPath(val);
                 setAlertDismissed(false);
                 setDateFilterMode('all');
-                void refreshCardRecursive(val);
+                void refreshCardSmart(val);
               }}
               className="flex-1 min-w-0 bg-[#101013] border border-[#2b2b34] rounded px-2 py-1 text-[11px] text-zinc-100 outline-none"
             >
@@ -754,7 +798,7 @@ export default function App() {
                         onDoubleClick={() => {
                           if (f.isDirectory) {
                             setCardPath(f.fullPath);
-                            void refreshDirectory(f.fullPath, setCardFiles);
+                            void refreshCardSmart(f.fullPath);
                           }
                         }}
                         className={`border-b border-white/[0.03] hover:bg-[#272730] ${
@@ -858,6 +902,10 @@ export default function App() {
               type="text"
               value={drive1Path}
               onChange={(e) => setDrive1Path(e.target.value)}
+              onBlur={() => void refreshDirectory(drive1Path, setDrive1Files)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void refreshDirectory(drive1Path, setDrive1Files);
+              }}
               placeholder="Đường dẫn Ổ 1 (vd: I:\01_Project video)"
               className="flex-1 min-w-0 bg-[#101013] border border-[#2b2b34] rounded px-2 py-1 text-[11px] text-zinc-100 outline-none"
             />
@@ -989,6 +1037,10 @@ export default function App() {
               type="text"
               value={drive2Path}
               onChange={(e) => setDrive2Path(e.target.value)}
+              onBlur={() => void refreshDirectory(drive2Path, setDrive2Files)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void refreshDirectory(drive2Path, setDrive2Files);
+              }}
               placeholder="Đường dẫn Ổ 2 (vd: E:\Backup_2026)"
               className="flex-1 min-w-0 bg-[#101013] border border-[#2b2b34] rounded px-2 py-1 text-[11px] text-zinc-100 outline-none"
             />

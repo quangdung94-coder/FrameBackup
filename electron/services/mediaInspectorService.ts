@@ -4,10 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import exifr from 'exifr';
-import ffmpegPath from 'ffmpeg-static';
+import ffmpegPathRaw from 'ffmpeg-static';
 import { scanFilesRecursive, type FileEntry } from './diskService';
 
 const execFileAsync = promisify(execFile);
+const ffmpegPath = ffmpegPathRaw ? ffmpegPathRaw.replace('app.asar', 'app.asar.unpacked') : null;
 
 export interface ShotInfo {
   name: string;

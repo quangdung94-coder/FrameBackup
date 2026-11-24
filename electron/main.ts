@@ -43,6 +43,12 @@ function createWindow() {
   });
 }
 
+function safeSend(channel: string, payload: unknown) {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
 function registerIpcHandlers() {
   ipcMain.handle('system:getInfo', () => ({
     platform: process.platform,
@@ -89,18 +95,14 @@ function registerIpcHandlers() {
   // Phase 2: Copy & Verify + External Engines
   ipcMain.handle('copy:listEngines', async () => detectCopyEngines());
   ipcMain.handle('copy:start', async (_event, req: CopyVerifyRequest) => {
-    return runCopyAndVerify(req, (progress) => {
-      mainWindow?.webContents.send('copy:progress', progress);
-    });
+    return runCopyAndVerify(req, (progress) => safeSend('copy:progress', progress));
   });
 
   ipcMain.handle('copy:cancel', () => cancelActiveCopy());
 
   // Phase 2: Watch Mode
   ipcMain.handle('watch:start', async (_event, dirPath: string, debounceSec: number) => {
-    await folderWatcher.start(dirPath, debounceSec, (status) => {
-      mainWindow?.webContents.send('watch:status', status);
-    });
+    await folderWatcher.start(dirPath, debounceSec, (status) => safeSend('watch:status', status));
   });
 
   ipcMain.handle('watch:stop', async () => {
@@ -117,9 +119,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('package:start', async (_event, req: PackageRequest) => {
-    return packageForDrive(req, (progress) => {
-      mainWindow?.webContents.send('package:progress', progress);
-    });
+    return packageForDrive(req, (progress) => safeSend('package:progress', progress));
   });
 
   ipcMain.handle('package:cancel', () => cancelPackaging());

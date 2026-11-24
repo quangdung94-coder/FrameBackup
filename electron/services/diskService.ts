@@ -209,11 +209,31 @@ export async function listDirectoryEntries(dirPath: string, readMetadata = true)
   }
 }
 
-export async function scanFilesRecursive(rootDir: string, readMetadata = true, maxDepth = 10): Promise<FileEntry[]> {
+const SKIP_OS_ROOT_DIRS = new Set([
+  'windows',
+  'program files',
+  'program files (x86)',
+  'programdata',
+  'appdata',
+  'node_modules',
+  '.git',
+  'applications',
+  'library',
+  'system',
+  'recovery',
+  'perflogs',
+]);
+
+export async function scanFilesRecursive(
+  rootDir: string,
+  readMetadata = true,
+  maxDepth = 10,
+  maxFiles = 20000
+): Promise<FileEntry[]> {
   const discoveredFiles: Array<{ name: string; fullPath: string }> = [];
 
   async function collectPaths(currentDir: string, depth: number) {
-    if (depth > maxDepth) return;
+    if (depth > maxDepth || discoveredFiles.length >= maxFiles) return;
     let dirents;
     try {
       dirents = await fs.readdir(currentDir, { withFileTypes: true });
@@ -221,7 +241,9 @@ export async function scanFilesRecursive(rootDir: string, readMetadata = true, m
       return;
     }
     for (const dirent of dirents) {
+      if (discoveredFiles.length >= maxFiles) break;
       if (isIgnoredSystemName(dirent.name)) continue;
+      if (dirent.isDirectory() && SKIP_OS_ROOT_DIRS.has(dirent.name.toLowerCase())) continue;
       const fullPath = path.join(currentDir, dirent.name);
       if (dirent.isDirectory()) {
         await collectPaths(fullPath, depth + 1);
