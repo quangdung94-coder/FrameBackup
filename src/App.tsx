@@ -22,7 +22,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { DateMismatchAlert, type DateGroupSummary } from './components/DateMismatchAlert';
-import { PipelineBar } from './components/PipelineBar';
+import { PipelineBar, type ActivityLogEntry } from './components/PipelineBar';
 import { ReportPreviewModal } from './components/ReportPreviewModal';
 import {
   formatBytes,
@@ -76,6 +76,40 @@ function FileIcon({ type }: { type: FileEntry['mediaType'] }) {
   return <FileText className="w-3.5 h-3.5 text-zinc-400 shrink-0" />;
 }
 
+const DEFAULT_COL_WEIGHTS: [number, number, number, number] = [25, 25, 25, 25];
+const DEFAULT_BOTTOM_HEIGHT = 195;
+
+function loadSavedColWeights(): [number, number, number, number] {
+  try {
+    const raw = localStorage.getItem('fb_col_weights');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length === 4 && parsed.every((n) => typeof n === 'number' && n >= 10)) {
+        return parsed as [number, number, number, number];
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return [...DEFAULT_COL_WEIGHTS];
+}
+
+function loadSavedNumber(key: string, fallback: number, min: number, max: number): number {
+  try {
+    const val = Number(localStorage.getItem(key));
+    if (!Number.isNaN(val) && val >= min && val <= max) return val;
+  } catch {
+    // Ignore
+  }
+  return fallback;
+}
+
+function formatNowClock(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 export default function App() {
   const [sysInfo, setSysInfo] = useState<SystemInfo>({
     platform: 'win32',
@@ -95,6 +129,16 @@ export default function App() {
   ]);
   const [selectedCopyEngine, setSelectedCopyEngine] = useState<CopyEngineId>('builtin');
   const [expandedCol, setExpandedCol] = useState<number | null>(null);
+
+  // Resizable layout & UI zoom (persisted in localStorage)
+  const [colWeights, setColWeights] = useState<[number, number, number, number]>(loadSavedColWeights);
+  const [bottomHeight, setBottomHeight] = useState<number>(() =>
+    loadSavedNumber('fb_bottom_height', DEFAULT_BOTTOM_HEIGHT, 155, 480)
+  );
+  const [uiScale, setUiScale] = useState<number>(() => loadSavedNumber('fb_ui_scale', 100, 100, 125));
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const logIdRef = useRef(0);
+  const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([]);
 
   // Column Paths & Entries
   const [cardPath, setCardPath] = useState('');
@@ -146,9 +190,120 @@ export default function App() {
 
   const parsedDriveFolderId = useMemo(() => parseGoogleDriveFolderId(driveLink), [driveLink]);
 
+  const pushLog = (text: string, level: ActivityLogEntry['level'] = 'info') => {
+    setActivityLogs((prev) => [
+      { id: ++logIdRef.current, time: formatNowClock(), text, level },
+      ...prev.slice(0, 79),
+    ]);
+  };
+
   const showToast = (msg: string) => {
     setToastMsg(msg);
+    const level: ActivityLogEntry['level'] = msg.startsWith('❌')
+      ? 'error'
+      : msg.startsWith('✅')
+      ? 'success'
+      : msg.startsWith('⚠') || msg.startsWith('👁')
+      ? 'warn'
+      : 'info';
+    pushLog(msg, level);
     setTimeout(() => setToastMsg((prev) => (prev === msg ? null : prev)), 5000);
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fb_col_weights', JSON.stringify(colWeights));
+    } catch {
+      // Ignore
+    }
+  }, [colWeights]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fb_bottom_height', String(bottomHeight));
+    } catch {
+      // Ignore
+    }
+  }, [bottomHeight]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fb_ui_scale', String(uiScale));
+    } catch {
+      // Ignore
+    }
+  }, [uiScale]);
+
+  const startHorizontalResize = (dividerIndex: 0 | 1 | 2, e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = workspaceRef.current;
+    if (!container) return;
+    const totalWidth = container.getBoundingClientRect().width;
+    if (totalWidth <= 0) return;
+
+    const startX = e.clientX;
+    const startWeights: [number, number, number, number] = [...colWeights];
+    const scaleFactor = uiScale / 100;
+    setExpandedCol(null);
+
+    document.body.style.cursor = 'col-resize';
+
+    const onMove = (ev: MouseEvent) => {
+      const deltaPct = ((ev.clientX - startX) / scaleFactor / totalWidth) * 100;
+      const pairSum = startWeights[dividerIndex] + startWeights[dividerIndex + 1];
+      const minPct = 12;
+      const nextLeft = Math.min(pairSum - minPct, Math.max(minPct, startWeights[dividerIndex] + deltaPct));
+      const nextRight = pairSum - nextLeft;
+      const next: [number, number, number, number] = [...startWeights];
+      next[dividerIndex] = Number(nextLeft.toFixed(2));
+      next[dividerIndex + 1] = Number(nextRight.toFixed(2));
+      setColWeights(next);
+    };
+
+    const onUp = () => {
+      document.body.style.cursor = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const startVerticalResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = bottomHeight;
+    const scaleFactor = uiScale / 100;
+
+    document.body.style.cursor = 'row-resize';
+
+    const onMove = (ev: MouseEvent) => {
+      const deltaY = (startY - ev.clientY) / scaleFactor;
+      const clamped = Math.max(155, Math.min(480, Math.round(startHeight + deltaY)));
+      setBottomHeight(clamped);
+    };
+
+    const onUp = () => {
+      document.body.style.cursor = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const handleToggleExpandCol = (colIndex: 1 | 2 | 3 | 4) => {
+    if (expandedCol === colIndex) {
+      setExpandedCol(null);
+      setColWeights([...DEFAULT_COL_WEIGHTS]);
+    } else {
+      setExpandedCol(colIndex);
+      const next: [number, number, number, number] = [18, 18, 18, 18];
+      next[colIndex - 1] = 46;
+      setColWeights(next);
+    }
   };
 
   const loadSystemData = async () => {
@@ -490,58 +645,77 @@ export default function App() {
   const isWatching = Boolean(watchStatus && ['watching', 'receiving', 'stabilizing'].includes(watchStatus.state));
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#121215] text-zinc-100 overflow-hidden">
+    <div
+      style={{ zoom: `${uiScale}%` }}
+      className="h-screen w-screen flex flex-col bg-[#121215] text-zinc-100 overflow-hidden"
+    >
       {/* Top Status Bar */}
-      <div className="h-8 bg-[#0d0d10] border-b border-[#2b2b34] px-3.5 flex items-center justify-between text-[11.5px] text-zinc-400 shrink-0">
-        <div className="flex items-center gap-2 font-semibold text-zinc-100">
-          <HardDrive className="w-4 h-4 text-blue-500" />
-          <span>FrameBackup v0.3.0</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#23232b] border border-[#3e3e4b] text-zinc-300">
+      <div className="h-10 bg-[#0d0d10] border-b border-[#2b2b34] px-4 flex items-center justify-between text-xs text-zinc-400 shrink-0">
+        <div className="flex items-center gap-2.5 font-semibold text-zinc-100 min-w-0">
+          <HardDrive className="w-4 h-4 text-blue-500 shrink-0" />
+          <span className="text-[13px] shrink-0">FrameBackup v0.3.0</span>
+          <span className="text-[11px] px-2 py-0.5 rounded bg-[#23232b] border border-[#3e3e4b] text-zinc-300 shrink-0">
             {osBadge} ({sysInfo.arch})
           </span>
           {toastMsg && (
-            <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/20 border border-blue-500/40 text-blue-200 text-[11px] font-normal">
+            <span className="ml-2 px-2.5 py-0.5 rounded-md bg-blue-500/20 border border-blue-500/40 text-blue-200 text-xs font-normal truncate">
               {toastMsg}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
+          {/* UI Scale Selector */}
+          <div className="inline-flex items-center bg-[#18181f] border border-[#32323d] rounded-md p-0.5 text-[11px]">
+            {[100, 115, 125].map((pct) => (
+              <button
+                key={pct}
+                onClick={() => setUiScale(pct)}
+                className={`px-2 py-0.5 rounded transition font-medium ${
+                  uiScale === pct ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                }`}
+                title={`Tỷ lệ hiển thị ${pct}%`}
+              >
+                {pct}%
+              </button>
+            ))}
+          </div>
+
           <button
             onClick={handleTogglePreventSleep}
-            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] border transition ${
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs border transition font-medium ${
               sysInfo.preventSleepActive
                 ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                : 'bg-[#1f1f26] border-[#32323d] text-zinc-400 hover:text-zinc-200'
+                : 'bg-[#1f1f26] border-[#32323d] text-zinc-300 hover:text-white'
             }`}
           >
-            <Moon className="w-3 h-3" />
+            <Moon className="w-3.5 h-3.5" />
             Prevent Sleep: {sysInfo.preventSleepActive ? 'ON' : 'OFF'}
           </button>
           <button
             onClick={loadSystemData}
-            className="inline-flex items-center gap-1 text-zinc-400 hover:text-zinc-200"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1f1f26] hover:bg-[#2a2a35] border border-[#32323d] text-zinc-200 text-xs transition"
             title="Quét lại ổ đĩa & thẻ nhớ"
           >
-            <RefreshCw className="w-3 h-3" /> Quét ổ đĩa ({drives.length})
+            <RefreshCw className="w-3.5 h-3.5" /> Quét ổ ({drives.length})
           </button>
         </div>
       </div>
 
-      {/* Ribbon Toolbar */}
-      <div className="bg-[#1b1b20] border-b border-[#2b2b34] px-3.5 py-2 flex items-center justify-between gap-3 flex-wrap shrink-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1.5 bg-[#101013] border border-[#2b2b34] px-2.5 py-1 rounded-md">
-            <span className="text-[11px] text-zinc-500">Show:</span>
+      {/* Ribbon Toolbar (Larger, Night-Friendly Controls) */}
+      <div className="bg-[#1b1b20] border-b border-[#2b2b34] px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap shrink-0">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="h-9 flex items-center gap-2 bg-[#101013] border border-[#32323d] px-3 rounded-lg">
+            <span className="text-xs text-zinc-400 font-medium">Show:</span>
             <input
               type="text"
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
-              className="bg-transparent text-xs text-zinc-100 outline-none w-44 font-medium"
+              className="bg-transparent text-[13px] text-zinc-100 outline-none w-48 font-semibold"
             />
           </div>
 
-          <div className="flex items-center gap-2 bg-[#101013] border border-[#2b2b34] px-2.5 py-1 rounded-md">
-            <span className="text-[11px] text-zinc-500">Ngày quay:</span>
+          <div className="h-9 flex items-center gap-2.5 bg-[#101013] border border-[#32323d] px-3 rounded-lg">
+            <span className="text-xs text-zinc-400 font-medium">Ngày quay:</span>
             <input
               type="date"
               value={targetDate}
@@ -549,14 +723,14 @@ export default function App() {
                 setTargetDate(e.target.value);
                 setAlertDismissed(false);
               }}
-              className="bg-transparent text-xs text-zinc-100 outline-none"
+              className="bg-transparent text-[13px] text-zinc-100 outline-none font-medium"
             />
-            <label className="inline-flex items-center gap-1 text-[11px] text-zinc-400 cursor-pointer">
+            <label className="inline-flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer pl-1 border-l border-[#2e2e38]">
               <input
                 type="checkbox"
                 checked={overnightMode}
                 onChange={(e) => setOvernightMode(e.target.checked)}
-                className="accent-blue-500"
+                className="accent-blue-500 w-3.5 h-3.5"
               />
               Xuyên đêm
             </label>
@@ -564,19 +738,19 @@ export default function App() {
 
           <button
             onClick={handleLoadDemoMismatch}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-red-500/15 hover:bg-red-500/25 border border-red-500/40 text-red-300 text-[11px] font-medium transition"
+            className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-500/45 text-red-200 text-xs font-semibold transition"
           >
-            <AlertTriangle className="w-3.5 h-3.5" /> Test Lệch ngày
+            <AlertTriangle className="w-4 h-4" /> Test Lệch ngày
           </button>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1.5 bg-[#101013] border border-[#2b2b34] px-2 py-1 rounded-md">
-            <span className="text-[11px] text-zinc-500">Copy:</span>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="h-9 flex items-center gap-2 bg-[#101013] border border-[#32323d] px-3 rounded-lg">
+            <span className="text-xs text-zinc-400 font-medium">Copy:</span>
             <select
               value={selectedCopyEngine}
               onChange={(e) => setSelectedCopyEngine(e.target.value as CopyEngineId)}
-              className="bg-transparent text-xs text-zinc-100 outline-none"
+              className="bg-transparent text-[13px] text-zinc-100 outline-none font-medium"
               title="Chọn trình copy (tự nhận diện app đã cài trên Windows / macOS)"
             >
               {copyEngines.map((eng) => (
@@ -588,12 +762,12 @@ export default function App() {
             </select>
           </div>
 
-          <div className="flex items-center gap-1.5 bg-[#101013] border border-[#2b2b34] px-2 py-1 rounded-md">
-            <span className="text-[11px] text-zinc-500">Drive:</span>
+          <div className="h-9 flex items-center gap-2 bg-[#101013] border border-[#32323d] px-3 rounded-lg">
+            <span className="text-xs text-zinc-400 font-medium">Drive:</span>
             <select
               value={packMode}
               onChange={(e) => setPackMode(e.target.value as typeof packMode)}
-              className="bg-transparent text-xs text-zinc-100 outline-none"
+              className="bg-transparent text-[13px] text-zinc-100 outline-none font-medium"
             >
               <option value="video-raw-smart" className="bg-[#202024]">Video: Folder | Ảnh: Zip Store</option>
               <option value="none" className="bg-[#202024]">Không nén tất cả</option>
@@ -602,12 +776,12 @@ export default function App() {
             </select>
           </div>
 
-          <div className="flex items-center gap-1.5 bg-[#101013] border border-[#2b2b34] px-2 py-1 rounded-md">
-            <span className="text-[11px] text-zinc-500">Xong:</span>
+          <div className="h-9 flex items-center gap-2 bg-[#101013] border border-[#32323d] px-3 rounded-lg">
+            <span className="text-xs text-zinc-400 font-medium">Xong:</span>
             <select
               value={postAction}
               onChange={(e) => setPostAction(e.target.value as typeof postAction)}
-              className="bg-transparent text-xs text-zinc-100 outline-none"
+              className="bg-transparent text-[13px] text-zinc-100 outline-none font-medium"
             >
               <option value="drive-report-sleep" className="bg-[#202024]">Drive Report + Sleep</option>
               <option value="drive-report-shutdown" className="bg-[#202024]">Drive Report + Shutdown</option>
@@ -618,18 +792,18 @@ export default function App() {
           {isWatching ? (
             <button
               onClick={() => window.frameBackup?.triggerWatchNow()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-amber-950 font-bold text-xs transition"
+              className="h-10 inline-flex items-center gap-2 px-5 rounded-lg bg-amber-500 hover:bg-amber-400 text-amber-950 font-extrabold text-sm transition shadow-lg shadow-amber-950/40"
             >
-              <Zap className="w-3.5 h-3.5 fill-current" />
+              <Zap className="w-4 h-4 fill-current" />
               ĐÃ CHÉP XONG — CHẠY NGAY
             </button>
           ) : (
             <button
               disabled={isRunning}
               onClick={handleRunFullPipeline}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 hover:brightness-110 disabled:opacity-50 border border-blue-400/60 text-white font-semibold text-xs shadow-lg shadow-blue-950/50 transition"
+              className="h-10 inline-flex items-center gap-2 px-5 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 hover:brightness-110 disabled:opacity-50 border border-blue-400/70 text-white font-bold text-sm shadow-lg shadow-blue-950/60 transition"
             >
-              {cardMode === 'watch' ? <Eye className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+              {cardMode === 'watch' ? <Eye className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
               {isRunning
                 ? 'ĐANG SAO LƯU...'
                 : cardMode === 'watch'
@@ -655,13 +829,14 @@ export default function App() {
         onDismiss={() => setAlertDismissed(true)}
       />
 
-      {/* 4-COLUMN PIPELINE WORKSPACE */}
-      <div className="flex-1 flex min-h-0 p-2.5 gap-1">
+      {/* 4-COLUMN RESIZABLE PIPELINE WORKSPACE */}
+      <div ref={workspaceRef} className="flex-1 flex min-h-0 p-2.5 gap-0">
         {/* COLUMN 1: THẺ NHỚ / NGUỒN */}
         <section
-          className={`flex flex-col min-w-[230px] bg-[#18181c] border rounded-lg overflow-hidden transition-all ${
-            expandedCol === 1 ? 'flex-[1.9] border-blue-500' : 'flex-1'
-          } ${showBigAlert ? 'border-red-500/75' : 'border-[#2b2b34]'}`}
+          style={{ flexBasis: `${colWeights[0]}%`, flexGrow: colWeights[0], flexShrink: 1 }}
+          className={`flex flex-col min-w-[160px] bg-[#18181c] border rounded-lg overflow-hidden ${
+            expandedCol === 1 ? 'border-blue-500' : showBigAlert ? 'border-red-500/75' : 'border-[#2b2b34]'
+          }`}
         >
           <div className="p-2 bg-[#141418] border-b border-[#2b2b34] space-y-1.5">
             <div className="flex items-center justify-between gap-1">
@@ -682,8 +857,9 @@ export default function App() {
                   </button>
                 )}
                 <button
-                  onClick={() => setExpandedCol(expandedCol === 1 ? null : 1)}
+                  onClick={() => handleToggleExpandCol(1)}
                   className="p-1 rounded bg-[#23232a] hover:bg-[#2e2e38] text-zinc-400 hover:text-white"
+                  title="Phóng to / Thu đều cột"
                 >
                   {expandedCol === 1 ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                 </button>
@@ -837,18 +1013,27 @@ export default function App() {
           </div>
         </section>
 
-        {/* CONNECTOR 1 -> 2 */}
-        <div className="w-6 flex items-center justify-center shrink-0">
-          <div className="w-5 h-9 rounded bg-[#1b1b20] border border-[#2b2b34] flex items-center justify-center text-blue-400">
-            <ArrowRight className="w-3.5 h-3.5" />
+        {/* RESIZABLE SPLITTER 1 <-> 2 */}
+        <div
+          onMouseDown={(e) => startHorizontalResize(0, e)}
+          onDoubleClick={() => {
+            setExpandedCol(null);
+            setColWeights([...DEFAULT_COL_WEIGHTS]);
+          }}
+          title="Kéo trái/phải để chỉnh độ rộng cột • Double-click để chia đều"
+          className="w-3.5 cursor-col-resize flex items-center justify-center shrink-0 group select-none"
+        >
+          <div className="w-1 h-14 rounded-full bg-[#2e2e38] group-hover:bg-blue-500 group-hover:h-24 transition-all flex items-center justify-center">
+            <ArrowRight className="w-3 h-3 text-blue-400 opacity-0 group-hover:opacity-100" />
           </div>
         </div>
 
         {/* COLUMN 2: Ổ 1 (LÀM VIỆC) */}
         <section
-          className={`flex flex-col min-w-[220px] bg-[#18181c] border rounded-lg overflow-hidden transition-all ${
-            expandedCol === 2 ? 'flex-[1.9] border-blue-500' : 'flex-1'
-          } ${d1Insufficient ? 'border-red-500' : 'border-[#2b2b34]'}`}
+          style={{ flexBasis: `${colWeights[1]}%`, flexGrow: colWeights[1], flexShrink: 1 }}
+          className={`flex flex-col min-w-[160px] bg-[#18181c] border rounded-lg overflow-hidden ${
+            expandedCol === 2 ? 'border-blue-500' : d1Insufficient ? 'border-red-500' : 'border-[#2b2b34]'
+          }`}
         >
           <div className="p-2 bg-[#141418] border-b border-[#2b2b34] space-y-1.5">
             <div className="flex items-center justify-between gap-1">
@@ -859,8 +1044,9 @@ export default function App() {
                 <span>Ổ 1 (LÀM VIỆC)</span>
               </div>
               <button
-                onClick={() => setExpandedCol(expandedCol === 2 ? null : 2)}
+                onClick={() => handleToggleExpandCol(2)}
                 className="p-1 rounded bg-[#23232a] hover:bg-[#2e2e38] text-zinc-400 hover:text-white"
+                title="Phóng to / Thu đều cột"
               >
                 {expandedCol === 2 ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
               </button>
@@ -972,18 +1158,27 @@ export default function App() {
           </div>
         </section>
 
-        {/* CONNECTOR 2 -> 3 */}
-        <div className="w-6 flex items-center justify-center shrink-0">
-          <div className="w-5 h-9 rounded bg-[#1b1b20] border border-[#2b2b34] flex items-center justify-center text-emerald-400">
-            <ArrowRight className="w-3.5 h-3.5" />
+        {/* RESIZABLE SPLITTER 2 <-> 3 */}
+        <div
+          onMouseDown={(e) => startHorizontalResize(1, e)}
+          onDoubleClick={() => {
+            setExpandedCol(null);
+            setColWeights([...DEFAULT_COL_WEIGHTS]);
+          }}
+          title="Kéo trái/phải để chỉnh độ rộng cột • Double-click để chia đều"
+          className="w-3.5 cursor-col-resize flex items-center justify-center shrink-0 group select-none"
+        >
+          <div className="w-1 h-14 rounded-full bg-[#2e2e38] group-hover:bg-emerald-500 group-hover:h-24 transition-all flex items-center justify-center">
+            <ArrowRight className="w-3 h-3 text-emerald-400 opacity-0 group-hover:opacity-100" />
           </div>
         </div>
 
         {/* COLUMN 3: Ổ 2 (SAO LƯU) */}
         <section
-          className={`flex flex-col min-w-[220px] bg-[#18181c] border rounded-lg overflow-hidden transition-all ${
-            expandedCol === 3 ? 'flex-[1.9] border-emerald-500' : 'flex-1'
-          } ${d2Insufficient ? 'border-red-500' : 'border-[#2b2b34]'}`}
+          style={{ flexBasis: `${colWeights[2]}%`, flexGrow: colWeights[2], flexShrink: 1 }}
+          className={`flex flex-col min-w-[160px] bg-[#18181c] border rounded-lg overflow-hidden ${
+            expandedCol === 3 ? 'border-emerald-500' : d2Insufficient ? 'border-red-500' : 'border-[#2b2b34]'
+          }`}
         >
           <div className="p-2 bg-[#141418] border-b border-[#2b2b34] space-y-1.5">
             <div className="flex items-center justify-between gap-1">
@@ -994,8 +1189,9 @@ export default function App() {
                 <span>Ổ 2 (SAO LƯU)</span>
               </div>
               <button
-                onClick={() => setExpandedCol(expandedCol === 3 ? null : 3)}
+                onClick={() => handleToggleExpandCol(3)}
                 className="p-1 rounded bg-[#23232a] hover:bg-[#2e2e38] text-zinc-400 hover:text-white"
+                title="Phóng to / Thu đều cột"
               >
                 {expandedCol === 3 ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
               </button>
@@ -1105,17 +1301,26 @@ export default function App() {
           </div>
         </section>
 
-        {/* CONNECTOR 3 -> 4 */}
-        <div className="w-6 flex items-center justify-center shrink-0">
-          <div className="w-5 h-9 rounded bg-[#1b1b20] border border-[#2b2b34] flex items-center justify-center text-purple-400">
-            <ArrowRight className="w-3.5 h-3.5" />
+        {/* RESIZABLE SPLITTER 3 <-> 4 */}
+        <div
+          onMouseDown={(e) => startHorizontalResize(2, e)}
+          onDoubleClick={() => {
+            setExpandedCol(null);
+            setColWeights([...DEFAULT_COL_WEIGHTS]);
+          }}
+          title="Kéo trái/phải để chỉnh độ rộng cột • Double-click để chia đều"
+          className="w-3.5 cursor-col-resize flex items-center justify-center shrink-0 group select-none"
+        >
+          <div className="w-1 h-14 rounded-full bg-[#2e2e38] group-hover:bg-purple-500 group-hover:h-24 transition-all flex items-center justify-center">
+            <ArrowRight className="w-3 h-3 text-purple-400 opacity-0 group-hover:opacity-100" />
           </div>
         </div>
 
         {/* COLUMN 4: GOOGLE DRIVE */}
         <section
-          className={`flex flex-col min-w-[230px] bg-[#18181c] border rounded-lg overflow-hidden transition-all ${
-            expandedCol === 4 ? 'flex-[1.9] border-purple-500' : 'flex-1 border-[#2b2b34]'
+          style={{ flexBasis: `${colWeights[3]}%`, flexGrow: colWeights[3], flexShrink: 1 }}
+          className={`flex flex-col min-w-[160px] bg-[#18181c] border rounded-lg overflow-hidden ${
+            expandedCol === 4 ? 'border-purple-500' : 'border-[#2b2b34]'
           }`}
         >
           <div className="p-2 bg-[#141418] border-b border-[#2b2b34] space-y-1.5">
@@ -1127,8 +1332,9 @@ export default function App() {
                 <span>GOOGLE DRIVE</span>
               </div>
               <button
-                onClick={() => setExpandedCol(expandedCol === 4 ? null : 4)}
+                onClick={() => handleToggleExpandCol(4)}
                 className="p-1 rounded bg-[#23232a] hover:bg-[#2e2e38] text-zinc-400 hover:text-white"
+                title="Phóng to / Thu đều cột"
               >
                 {expandedCol === 4 ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
               </button>
@@ -1186,13 +1392,25 @@ export default function App() {
         </section>
       </div>
 
+      {/* HORIZONTAL RESIZE SPLITTER (Drag up/down to resize Progress & Log Panel) */}
+      <div
+        onMouseDown={startVerticalResize}
+        onDoubleClick={() => setBottomHeight(DEFAULT_BOTTOM_HEIGHT)}
+        title="Kéo lên/xuống để chỉnh độ cao khung tiến trình & Live Log • Double-click để mặc định"
+        className="h-2.5 bg-[#121215] border-t border-[#2b2b34] cursor-row-resize flex items-center justify-center shrink-0 group select-none hover:bg-blue-500/15 transition"
+      >
+        <div className="w-16 h-1 rounded-full bg-[#3e3e4b] group-hover:bg-blue-400 transition" />
+      </div>
+
       {/* BOTTOM PIPELINE BAR */}
       <PipelineBar
         projectName={projectName}
+        heightPx={bottomHeight}
         step1Progress={step1Progress}
         step2Progress={step2Progress}
         step3Progress={step3Progress}
         watchStatus={watchStatus}
+        activityLogs={activityLogs}
         isRunning={isRunning || isWatching}
         onCancel={handleCancelAll}
         onOpenReportPreview={() => setReportOpen(true)}
