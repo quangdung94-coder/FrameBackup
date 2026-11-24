@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, shell } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
+import { detectCopyEngines } from './services/copyEngineService';
 import { cancelActiveCopy, runCopyAndVerify, type CopyVerifyRequest } from './services/copyVerifyService';
 import { listDirectoryEntries, listSystemDrives, scanFilesRecursive } from './services/diskService';
 import { safeEjectDrive } from './services/ejectService';
@@ -83,7 +84,8 @@ function registerIpcHandlers() {
     }
   });
 
-  // Phase 2: Copy & Verify
+  // Phase 2: Copy & Verify + External Engines
+  ipcMain.handle('copy:listEngines', async () => detectCopyEngines());
   ipcMain.handle('copy:start', async (_event, req: CopyVerifyRequest) => {
     return runCopyAndVerify(req, (progress) => {
       mainWindow?.webContents.send('copy:progress', progress);

@@ -1,5 +1,15 @@
 export type DateSource = 'exif' | 'video-atom' | 'mtime';
 export type DateFilterMode = 'all' | 'target-only' | 'split';
+export type CopyEngineId = 'builtin' | 'teracopy' | 'robocopy' | 'fastcopy' | 'rsync' | 'ditto';
+
+export interface CopyEngineOption {
+  id: CopyEngineId;
+  name: string;
+  description: string;
+  available: boolean;
+  executablePath?: string;
+  platform: 'all' | 'win32' | 'darwin';
+}
 
 export interface DriveInfo {
   id: string;
@@ -38,6 +48,7 @@ export interface CopyVerifyRequest {
   targetDate?: string;
   overnightMode?: boolean;
   dateFilterMode?: DateFilterMode;
+  engine?: CopyEngineId;
 }
 
 export interface CopyProgressEvent {
@@ -84,6 +95,7 @@ export interface FrameBackupBridge {
   scanRecursive: (dirPath: string) => Promise<FileEntry[]>;
   pickDirectory: (title?: string) => Promise<string | null>;
   openExternalUrl: (url: string) => Promise<void>;
+  listCopyEngines: () => Promise<CopyEngineOption[]>;
   startCopyVerify: (req: CopyVerifyRequest) => Promise<CopyVerifySummary>;
   cancelCopy: () => Promise<boolean>;
   onCopyProgress: (cb: (ev: CopyProgressEvent) => void) => () => void;

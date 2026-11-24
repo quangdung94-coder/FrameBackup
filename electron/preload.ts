@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { CopyEngineOption } from './services/copyEngineService';
 import type { CopyProgressEvent, CopyVerifyRequest, CopyVerifySummary } from './services/copyVerifyService';
 import type { DriveInfo, FileEntry } from './services/diskService';
 import type { WatchStatusEvent } from './services/watchService';
@@ -19,7 +20,8 @@ const api = {
   pickDirectory: (title?: string): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory', title),
   openExternalUrl: (url: string): Promise<void> => ipcRenderer.invoke('system:openExternal', url),
 
-  // Phase 2: Copy & Verify (XXHash64)
+  // Phase 2: Copy & Verify (XXHash64 + External Engines)
+  listCopyEngines: (): Promise<CopyEngineOption[]> => ipcRenderer.invoke('copy:listEngines'),
   startCopyVerify: (req: CopyVerifyRequest): Promise<CopyVerifySummary> => ipcRenderer.invoke('copy:start', req),
   cancelCopy: (): Promise<boolean> => ipcRenderer.invoke('copy:cancel'),
   onCopyProgress: (callback: (ev: CopyProgressEvent) => void): (() => void) => {

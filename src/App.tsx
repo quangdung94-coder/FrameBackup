@@ -29,6 +29,8 @@ import {
   formatShortDate,
   isTimestampMatchingTargetDate,
   parseGoogleDriveFolderId,
+  type CopyEngineId,
+  type CopyEngineOption,
   type CopyProgressEvent,
   type DateFilterMode,
   type DriveInfo,
@@ -76,6 +78,16 @@ export default function App() {
     preventSleepActive: false,
   });
   const [drives, setDrives] = useState<DriveInfo[]>([]);
+  const [copyEngines, setCopyEngines] = useState<CopyEngineOption[]>([
+    {
+      id: 'builtin',
+      name: 'FrameBackup Built-in (XXHash64)',
+      description: 'Mặc định',
+      available: true,
+      platform: 'all',
+    },
+  ]);
+  const [selectedCopyEngine, setSelectedCopyEngine] = useState<CopyEngineId>('builtin');
   const [expandedCol, setExpandedCol] = useState<number | null>(null);
 
   // Column Paths & Entries
@@ -114,9 +126,11 @@ export default function App() {
   const drive1PathRef = useRef(drive1Path);
   const drive2PathRef = useRef(drive2Path);
   const projectNameRef = useRef(projectName);
+  const selectedCopyEngineRef = useRef(selectedCopyEngine);
   drive1PathRef.current = drive1Path;
   drive2PathRef.current = drive2Path;
   projectNameRef.current = projectName;
+  selectedCopyEngineRef.current = selectedCopyEngine;
 
   const parsedDriveFolderId = useMemo(() => parseGoogleDriveFolderId(driveLink), [driveLink]);
 
@@ -127,12 +141,14 @@ export default function App() {
 
   const loadSystemData = async () => {
     if (!window.frameBackup) return;
-    const [info, diskList] = await Promise.all([
+    const [info, diskList, engineList] = await Promise.all([
       window.frameBackup.getSystemInfo(),
       window.frameBackup.listDrives(),
+      window.frameBackup.listCopyEngines(),
     ]);
     setSysInfo(info);
     setDrives(diskList);
+    if (engineList.length > 0) setCopyEngines(engineList);
   };
 
   useEffect(() => {
@@ -223,6 +239,7 @@ export default function App() {
       stage: 'drive1-to-drive2',
       sourceDir: sourceOnDrive1,
       destDir: destOnDrive2,
+      engine: selectedCopyEngineRef.current,
     });
     setIsRunning(false);
     if (res2.success) {
@@ -272,6 +289,7 @@ export default function App() {
       targetDate,
       overnightMode,
       dateFilterMode,
+      engine: selectedCopyEngine,
     });
 
     if (!res1.success) {
@@ -440,6 +458,23 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 bg-[#101013] border border-[#2b2b34] px-2 py-1 rounded-md">
+            <span className="text-[11px] text-zinc-500">Copy:</span>
+            <select
+              value={selectedCopyEngine}
+              onChange={(e) => setSelectedCopyEngine(e.target.value as CopyEngineId)}
+              className="bg-transparent text-xs text-zinc-100 outline-none"
+              title="Chọn trình copy (tự nhận diện app đã cài trên Windows / macOS)"
+            >
+              {copyEngines.map((eng) => (
+                <option key={eng.id} value={eng.id} disabled={!eng.available} className="bg-[#202024]">
+                  {eng.name}
+                  {!eng.available ? ' (Chưa cài)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="flex items-center gap-1.5 bg-[#101013] border border-[#2b2b34] px-2 py-1 rounded-md">
             <span className="text-[11px] text-zinc-500">Drive:</span>
             <select

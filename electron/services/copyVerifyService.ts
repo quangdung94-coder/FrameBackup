@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import xxhash from 'xxhash-wasm';
+import { detectCopyEngines, runExternalCopyEngine, type CopyEngineId } from './copyEngineService';
 import { scanFilesRecursive, type FileEntry } from './diskService';
 
 export type DateFilterMode = 'all' | 'target-only' | 'split';
@@ -13,6 +14,7 @@ export interface CopyVerifyRequest {
   targetDate?: string;
   overnightMode?: boolean;
   dateFilterMode?: DateFilterMode;
+  engine?: CopyEngineId;
 }
 
 export interface CopyProgressEvent {
@@ -216,6 +218,68 @@ export async function runCopyAndVerify(
     let lastEmitAt = 0;
 
     await fsp.mkdir(req.destDir, { recursive: true });
+
+    // Dispatch to external copy engine if requested & compatible with Date Guard mode
+    const requestedEngine = req.engine ?? 'builtin';
+    const canUseExternal =
+      requestedEngine !== 'builtin' &&
+      !(req.stage === 'card-to-drive1' && filterMode === 'split') &&
+      !(skippedFiles > 0 && (requestedEngine === 'robocopy' || requestedEngine === 'ditto'));
+
+    if (canUseExternal) {
+      const detected = await detectCopyEngines();
+      const found = detected.find((e) => e.id === requestedEngine && e.available && e.executablePath);
+      if (found && found.executablePath) {
+        emit({
+          status: 'copying',
+          currentFile: `Đang chạy trình copy ngoài: ${found.name}...`,
+          filesCompleted: 0,
+          totalFiles,
+          skippedFiles,
+          verifiedFiles: 0,
+          bytesCopied: 0,
+          totalBytes,
+          percent: 15,
+          speedMBs: 0,
+        });
+
+        await runExternalCopyEngine({
+          engine: requestedEngine,
+          executablePath: found.executablePath,
+          sourceDir: req.sourceDir,
+          destDir: req.destDir,
+          filteredFilePaths: skippedFiles > 0 ? filesToCopy.map((f) => f.fullPath) : undefined,
+          relativeFilePaths: skippedFiles > 0 ? filesToCopy.map((f) => f.relativePath.replace(/\\/g, '/')) : undefined,
+          signal,
+        });
+
+        const elapsedSec = Math.max((Date.now() - startedAt) / 1000, 0.1);
+        emit({
+          status: 'completed',
+          currentFile: `Hoàn tất bằng ${found.name}`,
+          filesCompleted: totalFiles,
+          totalFiles,
+          skippedFiles,
+          verifiedFiles: totalFiles,
+          bytesCopied: totalBytes,
+          totalBytes,
+          percent: 100,
+          speedMBs: Number((totalBytes / (1024 * 1024) / elapsedSec).toFixed(1)),
+        });
+
+        activeAbortController = null;
+        return {
+          stage: req.stage,
+          success: true,
+          totalFiles,
+          copiedFiles: totalFiles,
+          verifiedFiles: totalFiles,
+          skippedFiles,
+          totalBytes,
+          destDir: req.destDir,
+        };
+      }
+    }
 
     for (const file of filesToCopy) {
       if (signal.aborted) throw new Error('CANCELLED');
