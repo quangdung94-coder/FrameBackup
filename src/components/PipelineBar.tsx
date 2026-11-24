@@ -1,24 +1,27 @@
 import { Eye, Square } from 'lucide-react';
-import type { CopyProgressEvent, WatchStatusEvent } from '../types/framebackup';
+import type { CopyProgressEvent, PackageProgressEvent, WatchStatusEvent } from '../types/framebackup';
 
 interface PipelineBarProps {
   projectName: string;
   step1Progress: CopyProgressEvent | null;
   step2Progress: CopyProgressEvent | null;
+  step3Progress: PackageProgressEvent | null;
   watchStatus: WatchStatusEvent | null;
   isRunning: boolean;
   onCancel: () => void;
   onOpenReportPreview: () => void;
 }
 
-function getStatusColor(status?: CopyProgressEvent['status']) {
+function getStatusColor(status?: CopyProgressEvent['status'] | PackageProgressEvent['status']) {
   if (status === 'completed') return 'text-emerald-400';
   if (status === 'error' || status === 'cancelled') return 'text-red-400';
-  if (status === 'copying' || status === 'verifying' || status === 'scanning') return 'text-blue-400';
+  if (status === 'copying' || status === 'verifying' || status === 'scanning' || status === 'packing') {
+    return 'text-blue-400';
+  }
   return 'text-zinc-400';
 }
 
-function getStatusLabel(p: CopyProgressEvent | null, fallback: string) {
+function getCopyLabel(p: CopyProgressEvent | null, fallback: string) {
   if (!p) return fallback;
   if (p.status === 'completed') return '100% OK';
   if (p.status === 'cancelled') return 'Đã hủy';
@@ -27,10 +30,19 @@ function getStatusLabel(p: CopyProgressEvent | null, fallback: string) {
   return `${p.percent}%`;
 }
 
+function getPackLabel(p: PackageProgressEvent | null) {
+  if (!p) return 'Chờ bước 2';
+  if (p.status === 'completed') return '100% OK';
+  if (p.status === 'cancelled') return 'Đã hủy';
+  if (p.status === 'error') return 'Lỗi';
+  return `${p.percent}%`;
+}
+
 export function PipelineBar({
   projectName,
   step1Progress,
   step2Progress,
+  step3Progress,
   watchStatus,
   isRunning,
   onCancel,
@@ -81,7 +93,7 @@ export function PipelineBar({
           <div className="flex justify-between items-center text-[11.5px] font-semibold">
             <span>① Thẻ nhớ ➔ Ổ 1</span>
             <span className={getStatusColor(step1Progress?.status)}>
-              {getStatusLabel(step1Progress, 'Sẵn sàng')}
+              {getCopyLabel(step1Progress, 'Sẵn sàng')}
             </span>
           </div>
           <div className="text-[10.5px] text-zinc-400 truncate">
@@ -112,7 +124,7 @@ export function PipelineBar({
           <div className="flex justify-between items-center text-[11.5px] font-semibold">
             <span>② Ổ 1 ➔ Ổ 2 (Backup)</span>
             <span className={getStatusColor(step2Progress?.status)}>
-              {getStatusLabel(step2Progress, 'Chờ bước 1')}
+              {getCopyLabel(step2Progress, 'Chờ bước 1')}
             </span>
           </div>
           <div className="text-[10.5px] text-zinc-400 truncate">
@@ -129,14 +141,29 @@ export function PipelineBar({
         </div>
 
         {/* Step 3 */}
-        <div className="bg-[#18181c] border border-[#2b2b34] rounded-md px-2.5 py-2 flex flex-col gap-1">
+        <div
+          className={`bg-[#18181c] border rounded-md px-2.5 py-2 flex flex-col gap-1 ${
+            step3Progress?.status === 'completed'
+              ? 'border-emerald-500/45'
+              : step3Progress && ['scanning', 'packing'].includes(step3Progress.status)
+              ? 'border-amber-400'
+              : 'border-[#2b2b34]'
+          }`}
+        >
           <div className="flex justify-between items-center text-[11.5px] font-semibold">
             <span>③ Đóng gói & Thumbnail</span>
-            <span className="text-zinc-500">Phase 3</span>
+            <span className={getStatusColor(step3Progress?.status)}>{getPackLabel(step3Progress)}</span>
           </div>
-          <div className="text-[10.5px] text-zinc-400 truncate">Zip Store (Ảnh) + Cắt 2 Thumbnail đầu/cuối</div>
+          <div className="text-[10.5px] text-zinc-400 truncate">
+            {step3Progress ? step3Progress.message : 'Zip Store (Ảnh) + Cắt 2 Thumbnail đầu/cuối'}
+          </div>
           <div className="h-1.5 bg-[#272730] rounded-full overflow-hidden">
-            <div className="h-full w-0 bg-amber-500 rounded-full" />
+            <div
+              className={`h-full rounded-full transition-all ${
+                step3Progress?.status === 'completed' ? 'bg-emerald-500' : 'bg-amber-500'
+              }`}
+              style={{ width: `${step3Progress?.percent ?? 0}%` }}
+            />
           </div>
         </div>
 

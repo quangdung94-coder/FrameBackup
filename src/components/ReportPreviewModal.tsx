@@ -1,5 +1,5 @@
 import { X, FileText, Image as ImageIcon } from 'lucide-react';
-import { formatDisplayDate } from '../types/framebackup';
+import { formatDisplayDate, formatShortDate, type MediaReportResult } from '../types/framebackup';
 
 interface ReportPreviewModalProps {
   open: boolean;
@@ -7,6 +7,7 @@ interface ReportPreviewModalProps {
   projectName: string;
   targetDate: string;
   driveLink: string;
+  mediaReport: MediaReportResult | null;
 }
 
 export function ReportPreviewModal({
@@ -15,9 +16,31 @@ export function ReportPreviewModal({
   projectName,
   targetDate,
   driveLink,
+  mediaReport,
 }: ReportPreviewModalProps) {
   if (!open) return null;
   const displayDate = formatDisplayDate(targetDate);
+
+  const first = mediaReport?.firstShot ?? null;
+  const last = mediaReport?.lastShot ?? null;
+
+  const fallbackText = `=========================================
+FRAMEBACKUP — BACKUP & UPLOAD REPORT
+Project  : ${projectName}
+Completed: ${displayDate} (Chưa chạy job thực tế)
+=========================================
+- Total Files  : (Sẽ tự đếm khi chạy xong bước 2)
+- Verify Ổ 1&2 : PASSED (XXHash64 100%)
+- Cloud Mode   : Resumable Upload
+
+[TIMELINE]
+- First Shot : (Tự trích xuất từ EXIF / Video)
+- Last Shot  : (Tự trích xuất từ EXIF / Video)
+
+[THUMBNAILS IN THIS FOLDER]
+- _01_FIRST_SHOT_<giờ>_<tên>.jpg
+- _02_LAST_SHOT_<giờ>_<tên>.jpg
+=========================================`;
 
   return (
     <div
@@ -26,10 +49,12 @@ export function ReportPreviewModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-[#1e1e24] border border-[#3e3e4b] rounded-xl w-[840px] max-w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+      <div className="bg-[#1e1e24] border border-[#3e3e4b] rounded-xl w-[860px] max-w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
         <div className="px-4 py-3 border-b border-[#2b2b34] flex items-center justify-between">
           <span className="font-semibold text-sm text-zinc-100">
-            Xem trước Báo cáo tự động trên Google Drive (_00_BACKUP_REPORT.txt + 2 Thumbnail)
+            {mediaReport
+              ? 'Báo cáo Thực tế đã Tạo (Sẵn sàng đẩy lên Google Drive)'
+              : 'Xem trước Mẫu Báo cáo Google Drive (_00_BACKUP_REPORT.txt + 2 Thumbnail)'}
           </span>
           <button
             onClick={onClose}
@@ -52,28 +77,43 @@ export function ReportPreviewModal({
             </p>
 
             <div className="grid grid-cols-2 gap-2.5">
+              {/* First Shot */}
               <div className="bg-slate-900 border border-slate-700 rounded-md overflow-hidden">
-                <div className="h-24 bg-gradient-to-br from-slate-800 to-slate-950 flex items-center justify-center text-[11px] text-slate-400 relative">
-                  <span className="absolute top-1.5 left-1.5 bg-blue-600/90 px-1.5 py-0.5 rounded text-[9.5px] text-white font-semibold">
-                    _01_FIRST_SHOT
+                <div className="h-28 bg-gradient-to-br from-slate-800 to-slate-950 flex items-center justify-center text-[11px] text-slate-400 relative overflow-hidden">
+                  <span className="absolute top-1.5 left-1.5 z-10 bg-blue-600/90 px-1.5 py-0.5 rounded text-[9.5px] text-white font-semibold">
+                    SHOT ĐẦU
                   </span>
-                  [Frame C0001.MP4]
+                  {first?.thumbnailDataUrl ? (
+                    <img src={first.thumbnailDataUrl} alt="First Shot" className="w-full h-full object-cover" />
+                  ) : (
+                    <span>[Frame Shot Đầu]</span>
+                  )}
                 </div>
                 <div className="p-2 text-[10.5px] text-slate-300">
-                  <div className="font-semibold truncate">_01_FIRST_SHOT_08h15_C0001.jpg</div>
-                  <div className="text-slate-400">{displayDate} • 08:15:10</div>
+                  <div className="font-semibold truncate">{first?.thumbnailFileName || first?.name || '_01_FIRST_SHOT.jpg'}</div>
+                  <div className="text-slate-400">
+                    {first ? formatShortDate(first.shotTimeMs) : `${displayDate} • --:--`}
+                  </div>
                 </div>
               </div>
+
+              {/* Last Shot */}
               <div className="bg-slate-900 border border-slate-700 rounded-md overflow-hidden">
-                <div className="h-24 bg-gradient-to-br from-slate-800 to-slate-950 flex items-center justify-center text-[11px] text-slate-400 relative">
-                  <span className="absolute top-1.5 left-1.5 bg-emerald-600/90 px-1.5 py-0.5 rounded text-[9.5px] text-white font-semibold">
-                    _02_LAST_SHOT
+                <div className="h-28 bg-gradient-to-br from-slate-800 to-slate-950 flex items-center justify-center text-[11px] text-slate-400 relative overflow-hidden">
+                  <span className="absolute top-1.5 left-1.5 z-10 bg-emerald-600/90 px-1.5 py-0.5 rounded text-[9.5px] text-white font-semibold">
+                    SHOT CUỐI
                   </span>
-                  [Frame C0003.MP4]
+                  {last?.thumbnailDataUrl ? (
+                    <img src={last.thumbnailDataUrl} alt="Last Shot" className="w-full h-full object-cover" />
+                  ) : (
+                    <span>[Frame Shot Cuối]</span>
+                  )}
                 </div>
                 <div className="p-2 text-[10.5px] text-slate-300">
-                  <div className="font-semibold truncate">_02_LAST_SHOT_18h50_C0003.jpg</div>
-                  <div className="text-slate-400">{displayDate} • 18:50:41</div>
+                  <div className="font-semibold truncate">{last?.thumbnailFileName || last?.name || '_02_LAST_SHOT.jpg'}</div>
+                  <div className="text-slate-400">
+                    {last ? formatShortDate(last.shotTimeMs) : `${displayDate} • --:--`}
+                  </div>
                 </div>
               </div>
             </div>
@@ -90,23 +130,7 @@ export function ReportPreviewModal({
               <FileText className="w-4 h-4" /> Nội dung file _00_BACKUP_REPORT.txt
             </div>
             <pre className="font-mono text-[11px] leading-relaxed text-zinc-300 bg-[#0c0c0f] p-3 rounded-md border border-[#2b2b34] whitespace-pre-wrap flex-1">
-{`=========================================
-FRAMEBACKUP — BACKUP & UPLOAD REPORT
-Project  : ${projectName}
-Completed: ${displayDate} 19:45:10
-=========================================
-- Total Files  : 138 files (82.05 GB)
-- Verify Ổ 1&2 : PASSED (XXHash64 100%)
-- Cloud Mode   : Resumable Upload OK
-
-[TIMELINE]
-- First Shot : C0001.MP4 | ${displayDate} 08:15:10
-- Last Shot  : C0003.MP4 | ${displayDate} 18:50:41
-
-[THUMBNAILS IN THIS FOLDER]
-- _01_FIRST_SHOT_08h15_C0001.jpg
-- _02_LAST_SHOT_18h50_C0003.jpg
-=========================================`}
+              {mediaReport?.reportText ?? fallbackText}
             </pre>
           </div>
         </div>

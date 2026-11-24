@@ -1,6 +1,6 @@
 # Lộ trình Triển khai (Project Roadmap)
 
-Trạng thái hiện tại: **Hoàn thành Phase 2 (Engine Metadata, Date Guard, Copy & Verify XXHash64, Watch Mode, Safe Eject)** — Chuẩn bị bước vào Phase 3 (Thumbnail Shot đầu/cuối & Đóng gói 7z/Zip).
+Trạng thái hiện tại: **Hoàn thành Phase 3 (Media Inspector Shot đầu/cuối, Thumbnail Video/RAW, Đóng gói 7z/Zip Store)** — Chuẩn bị bước vào Phase 4 (Google Drive API v3 & Resumable Upload).
 
 ---
 
@@ -28,10 +28,10 @@ Trạng thái hiện tại: **Hoàn thành Phase 2 (Engine Metadata, Date Guard,
 
 ---
 
-## Phase 3: Media Inspector, Thumbnail & Đóng gói
-- [ ] Tự động tìm **Shot đầu tiên** và **Shot cuối cùng** theo thời gian quay/chụp gốc.
-- [ ] Xuất 2 ảnh Thumbnail nhẹ (`ffmpeg-static` cho Video, `exifr` Embedded Preview cho Ảnh RAW/JPG).
-- [ ] Tích hợp `7zip-bin` với 3 chế độ: Không nén / Zip Store (cho Ảnh) / Nén 7z + tự dọn file tạm.
+## Phase 3: Media Inspector, Thumbnail & Đóng gói ✅
+- [x] Tự động tìm **Shot đầu tiên** và **Shot cuối cùng** theo thời gian quay/chụp gốc.
+- [x] Xuất 2 ảnh Thumbnail nhẹ (`ffmpeg-static` cho Video, `exifr` Embedded Preview cho Ảnh RAW/JPG) kèm file `_00_BACKUP_REPORT.txt`.
+- [x] Tích hợp `7zip-bin` với 4 chế độ: Video lẻ + Ảnh Zip Store / Không nén / Zip Store toàn bộ / Nén 7z.
 
 ---
 

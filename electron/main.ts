@@ -5,6 +5,8 @@ import { detectCopyEngines } from './services/copyEngineService';
 import { cancelActiveCopy, runCopyAndVerify, type CopyVerifyRequest } from './services/copyVerifyService';
 import { listDirectoryEntries, listSystemDrives, scanFilesRecursive } from './services/diskService';
 import { safeEjectDrive } from './services/ejectService';
+import { inspectAndBuildReport, type InspectReportRequest } from './services/mediaInspectorService';
+import { cancelPackaging, packageForDrive, type PackageRequest } from './services/packagingService';
 import { folderWatcher } from './services/watchService';
 
 let mainWindow: BrowserWindow | null = null;
@@ -108,6 +110,19 @@ function registerIpcHandlers() {
   ipcMain.handle('watch:triggerNow', async () => {
     await folderWatcher.triggerNow();
   });
+
+  // Phase 3: Media Inspector & Packaging
+  ipcMain.handle('media:inspectAndReport', async (_event, req: InspectReportRequest) => {
+    return inspectAndBuildReport(req);
+  });
+
+  ipcMain.handle('package:start', async (_event, req: PackageRequest) => {
+    return packageForDrive(req, (progress) => {
+      mainWindow?.webContents.send('package:progress', progress);
+    });
+  });
+
+  ipcMain.handle('package:cancel', () => cancelPackaging());
 }
 
 app.whenReady().then(() => {
@@ -122,6 +137,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', async () => {
   await folderWatcher.stop();
   cancelActiveCopy();
+  cancelPackaging();
   if (powerSaveId !== null && powerSaveBlocker.isStarted(powerSaveId)) {
     powerSaveBlocker.stop(powerSaveId);
   }

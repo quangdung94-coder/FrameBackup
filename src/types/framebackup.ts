@@ -90,6 +90,62 @@ export interface WatchStatusEvent {
   message: string;
 }
 
+export type PackMode = 'video-raw-smart' | 'none' | 'zip-store' | '7z';
+
+export interface ShotInfo {
+  name: string;
+  relativePath: string;
+  shotTimeMs: number;
+  mediaType: FileEntry['mediaType'];
+  thumbnailPath?: string;
+  thumbnailFileName?: string;
+  thumbnailDataUrl?: string;
+}
+
+export interface MediaReportResult {
+  projectName: string;
+  stagingDir: string;
+  reportFilePath: string;
+  reportFileName: string;
+  reportText: string;
+  totalFiles: number;
+  videoCount: number;
+  photoCount: number;
+  rawCount: number;
+  totalBytes: number;
+  firstShot: ShotInfo | null;
+  lastShot: ShotInfo | null;
+}
+
+export interface InspectReportRequest {
+  projectName: string;
+  sourceDir: string;
+  verifyStatusText?: string;
+  skippedOldFiles?: number;
+  keptMismatchFiles?: number;
+}
+
+export interface PackageRequest {
+  projectName: string;
+  sourceDir: string;
+  packMode: PackMode;
+}
+
+export interface PackageProgressEvent {
+  status: 'scanning' | 'packing' | 'completed' | 'cancelled' | 'error';
+  percent: number;
+  message: string;
+}
+
+export interface PackageResult {
+  success: boolean;
+  packMode: PackMode;
+  archivePaths: string[];
+  looseFilePaths: string[];
+  totalOutputBytes: number;
+  error?: string;
+}
+
 export interface FrameBackupBridge {
   getSystemInfo: () => Promise<SystemInfo>;
   setPreventSleep: (enabled: boolean) => Promise<boolean>;
@@ -107,6 +163,10 @@ export interface FrameBackupBridge {
   triggerWatchNow: () => Promise<void>;
   onWatchStatus: (cb: (ev: WatchStatusEvent) => void) => () => void;
   safeEject: (mountPath: string) => Promise<{ ok: boolean; message: string }>;
+  inspectAndBuildReport: (req: InspectReportRequest) => Promise<MediaReportResult>;
+  packageForDrive: (req: PackageRequest) => Promise<PackageResult>;
+  cancelPackaging: () => Promise<boolean>;
+  onPackageProgress: (cb: (ev: PackageProgressEvent) => void) => () => void;
 }
 
 declare global {

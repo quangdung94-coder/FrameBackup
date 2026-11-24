@@ -38,6 +38,9 @@ import {
   type DateFilterMode,
   type DriveInfo,
   type FileEntry,
+  type MediaReportResult,
+  type PackMode,
+  type PackageProgressEvent,
   type SystemInfo,
   type WatchStatusEvent,
 } from './types/framebackup';
@@ -111,7 +114,7 @@ export default function App() {
   // Settings (Telegram removed — Drive Report + Sleep/Shutdown only)
   const [targetDate, setTargetDate] = useState(getTodayDateString);
   const [overnightMode, setOvernightMode] = useState(true);
-  const [packMode, setPackMode] = useState<'video-raw-smart' | 'none' | 'zip-store' | '7z'>('video-raw-smart');
+  const [packMode, setPackMode] = useState<PackMode>('video-raw-smart');
   const [postAction, setPostAction] = useState<'drive-report-sleep' | 'drive-report-shutdown' | 'drive-report-only'>(
     'drive-report-sleep'
   );
@@ -119,10 +122,12 @@ export default function App() {
   const [alertDismissed, setAlertDismissed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
 
-  // Phase 2 Live Pipeline State
+  // Phase 2 & 3 Live Pipeline State
   const [isRunning, setIsRunning] = useState(false);
   const [step1Progress, setStep1Progress] = useState<CopyProgressEvent | null>(null);
   const [step2Progress, setStep2Progress] = useState<CopyProgressEvent | null>(null);
+  const [step3Progress, setStep3Progress] = useState<PackageProgressEvent | null>(null);
+  const [mediaReport, setMediaReport] = useState<MediaReportResult | null>(null);
   const [watchStatus, setWatchStatus] = useState<WatchStatusEvent | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -131,10 +136,12 @@ export default function App() {
   const drive2PathRef = useRef(drive2Path);
   const projectNameRef = useRef(projectName);
   const selectedCopyEngineRef = useRef(selectedCopyEngine);
+  const packModeRef = useRef(packMode);
   drive1PathRef.current = drive1Path;
   drive2PathRef.current = drive2Path;
   projectNameRef.current = projectName;
   selectedCopyEngineRef.current = selectedCopyEngine;
+  packModeRef.current = packMode;
 
   const parsedDriveFolderId = useMemo(() => parseGoogleDriveFolderId(driveLink), [driveLink]);
 
@@ -164,15 +171,20 @@ export default function App() {
       if (ev.stage === 'drive1-to-drive2') setStep2Progress(ev);
     });
 
+    const unsubPack = window.frameBackup.onPackageProgress((ev) => {
+      setStep3Progress(ev);
+    });
+
     const unsubWatch = window.frameBackup.onWatchStatus((st) => {
       setWatchStatus(st);
       if (st.state === 'ready') {
-        void runDrive1ToDrive2(st.watchDir);
+        void runStep2And3(st.watchDir, 0, 0);
       }
     });
 
     return () => {
       unsubCopy();
+      unsubPack();
       unsubWatch();
     };
   }, []);
@@ -244,30 +256,61 @@ export default function App() {
     }
   };
 
-  const runDrive1ToDrive2 = async (sourceOnDrive1: string) => {
+  const runStep2And3 = async (
+    sourceOnDrive1: string,
+    skippedOldFiles: number,
+    keptMismatchFiles: number
+  ) => {
     if (!window.frameBackup) return;
-    const d2Base = drive2PathRef.current;
-    if (!d2Base) {
-      showToast('Chưa chọn thư mục Ổ 2 (Sao lưu) nên chỉ hoàn tất bước 1.');
-      return;
-    }
     const safeShow = sanitizeFolderName(projectNameRef.current) || 'FrameBackup_Show';
+    const d2Base = drive2PathRef.current;
+
     setIsRunning(true);
-    const destOnDrive2 = joinPath(d2Base, safeShow);
-    const res2 = await window.frameBackup.startCopyVerify({
-      stage: 'drive1-to-drive2',
-      sourceDir: sourceOnDrive1,
-      destDir: destOnDrive2,
-      engine: selectedCopyEngineRef.current,
-    });
-    setIsRunning(false);
-    if (res2.success) {
-      const resumeNote = res2.resumedFiles > 0 ? `, Resume ${res2.resumedFiles} files` : '';
-      showToast(`✅ Xong Ổ 2 (${res2.verifiedFiles} files Verify OK${resumeNote}, engine: ${res2.usedEngine})!`);
+    let verifyText = 'PASSED (Ổ 1 XXHash64 100%)';
+
+    if (d2Base) {
+      const destOnDrive2 = joinPath(d2Base, safeShow);
+      const res2 = await window.frameBackup.startCopyVerify({
+        stage: 'drive1-to-drive2',
+        sourceDir: sourceOnDrive1,
+        destDir: destOnDrive2,
+        engine: selectedCopyEngineRef.current,
+      });
+      if (!res2.success) {
+        setIsRunning(false);
+        if (res2.error !== 'CANCELLED') {
+          showToast(`❌ Lỗi Sao lưu Ổ 2: ${res2.error}`);
+        }
+        return;
+      }
+      verifyText = `PASSED (Ổ 1 & Ổ 2: ${res2.verifiedFiles} files khớp 100%)`;
       await refreshDirectory(d2Base, setDrive2Files);
-      await loadSystemData();
-    } else if (res2.error !== 'CANCELLED') {
-      showToast(`❌ Lỗi Sao lưu Ổ 2: ${res2.error}`);
+    }
+
+    // Phase 3: Media Inspector (First/Last Shot + Thumbnails) & Packaging
+    setStep3Progress({ status: 'scanning', percent: 5, message: 'Đang trích xuất Thumbnail Shot đầu & cuối...' });
+    const report = await window.frameBackup.inspectAndBuildReport({
+      projectName: safeShow,
+      sourceDir: sourceOnDrive1,
+      verifyStatusText: verifyText,
+      skippedOldFiles,
+      keptMismatchFiles,
+    });
+    setMediaReport(report);
+
+    const packRes = await window.frameBackup.packageForDrive({
+      projectName: safeShow,
+      sourceDir: sourceOnDrive1,
+      packMode: packModeRef.current,
+    });
+
+    setIsRunning(false);
+    await loadSystemData();
+
+    if (packRes.success) {
+      showToast('✅ Xong Bước 1–3 (Backup + Thumbnail + Đóng gói)! Bấm "Xem trước Báo cáo" để kiểm tra.');
+    } else if (packRes.error !== 'CANCELLED') {
+      showToast(`❌ Lỗi đóng gói: ${packRes.error}`);
     }
   };
 
@@ -314,6 +357,8 @@ export default function App() {
     setIsRunning(true);
     setStep1Progress(null);
     setStep2Progress(null);
+    setStep3Progress(null);
+    setMediaReport(null);
     await window.frameBackup.setPreventSleep(true);
     setSysInfo((prev) => ({ ...prev, preventSleepActive: true }));
 
@@ -339,20 +384,20 @@ export default function App() {
     await refreshDirectory(drive1Path, setDrive1Files);
     const resumeNote = res1.resumedFiles > 0 ? `, Resume ${res1.resumedFiles}` : '';
     showToast(
-      `✅ Xong Ổ 1 (${res1.verifiedFiles} files${resumeNote}, lọc bỏ ${res1.skippedFiles} file lệch ngày) — Đang chạy Ổ 2...`
+      `✅ Xong Ổ 1 (${res1.verifiedFiles} files${resumeNote}, lọc bỏ ${res1.skippedFiles} file lệch ngày) — Đang chạy tiếp...`
     );
 
-    if (drive2Path) {
-      await runDrive1ToDrive2(destOnDrive1);
-    } else {
-      setIsRunning(false);
-      await loadSystemData();
-    }
+    const keptMismatch =
+      dateFilterMode === 'all'
+        ? dateGroups.filter((g) => !g.isTarget).reduce((acc, g) => acc + g.count, 0)
+        : 0;
+    await runStep2And3(destOnDrive1, res1.skippedFiles, keptMismatch);
   };
 
   const handleCancelAll = async () => {
     if (!window.frameBackup) return;
     await window.frameBackup.cancelCopy();
+    await window.frameBackup.cancelPackaging();
     await window.frameBackup.stopWatch();
     setWatchStatus(null);
     setIsRunning(false);
@@ -1094,6 +1139,7 @@ export default function App() {
         projectName={projectName}
         step1Progress={step1Progress}
         step2Progress={step2Progress}
+        step3Progress={step3Progress}
         watchStatus={watchStatus}
         isRunning={isRunning || isWatching}
         onCancel={handleCancelAll}
@@ -1107,6 +1153,7 @@ export default function App() {
         projectName={projectName}
         targetDate={targetDate}
         driveLink={driveLink}
+        mediaReport={mediaReport}
       />
     </div>
   );

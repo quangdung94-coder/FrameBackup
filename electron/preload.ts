@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { CopyEngineOption } from './services/copyEngineService';
 import type { CopyProgressEvent, CopyVerifyRequest, CopyVerifySummary } from './services/copyVerifyService';
 import type { DriveInfo, FileEntry } from './services/diskService';
+import type { InspectReportRequest, MediaReportResult } from './services/mediaInspectorService';
+import type { PackageProgressEvent, PackageRequest, PackageResult } from './services/packagingService';
 import type { WatchStatusEvent } from './services/watchService';
 
 export interface SystemInfo {
@@ -44,6 +46,18 @@ const api = {
   // Phase 2: Safe Eject
   safeEject: (mountPath: string): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('disk:safeEject', mountPath),
+
+  // Phase 3: Media Inspector, Thumbnails & Packaging
+  inspectAndBuildReport: (req: InspectReportRequest): Promise<MediaReportResult> =>
+    ipcRenderer.invoke('media:inspectAndReport', req),
+  packageForDrive: (req: PackageRequest): Promise<PackageResult> =>
+    ipcRenderer.invoke('package:start', req),
+  cancelPackaging: (): Promise<boolean> => ipcRenderer.invoke('package:cancel'),
+  onPackageProgress: (callback: (ev: PackageProgressEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: PackageProgressEvent) => callback(data);
+    ipcRenderer.on('package:progress', handler);
+    return () => ipcRenderer.removeListener('package:progress', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('frameBackup', api);
