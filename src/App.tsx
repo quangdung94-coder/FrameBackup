@@ -23,6 +23,7 @@ import {
   Upload,
   Zap,
 } from 'lucide-react';
+import framebackupLogo from './assets/framebackup-logo.svg';
 import { DateMismatchAlert, type DateGroupSummary } from './components/DateMismatchAlert';
 import { GoogleDriveAuthModal } from './components/GoogleDriveAuthModal';
 import { HistoryModal } from './components/HistoryModal';
@@ -866,7 +867,7 @@ export default function App() {
       {/* Top Status Bar */}
       <div className="h-10 bg-[#0d0d10] border-b border-[#2b2b34] px-4 flex items-center justify-between text-xs text-zinc-400 shrink-0">
         <div className="flex items-center gap-2.5 font-semibold text-zinc-100 min-w-0">
-          <HardDrive className="w-4 h-4 text-blue-500 shrink-0" />
+          <img src={framebackupLogo} alt="FrameBackup" className="w-5 h-5 shrink-0" />
           <span className="text-[13px] shrink-0">FrameBackup v1.0.0</span>
           <span className="text-[11px] px-2 py-0.5 rounded bg-[#23232b] border border-[#3e3e4b] text-zinc-300 shrink-0">
             {osBadge} ({sysInfo.arch})

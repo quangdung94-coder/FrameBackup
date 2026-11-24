@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="fbGrad" x1="0%" y1="0%" x2="0%" y2="100%" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2AD0C9" />
+      <stop offset="52%" stop-color="#3399CF" />
+      <stop offset="100%" stop-color="#3C61C6" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer B geometric monogram -->
+  <path fill="url(#fbGrad)" d="
+    M 272 268
+    H 556
+    C 656 268 724 322 724 404
+    C 724 452 698 486 656 504
+    C 712 522 752 566 752 628
+    C 752 710 680 756 572 756
+    H 428
+    L 468 704
+    H 568
+    C 642 704 696 674 696 622
+    C 696 566 644 536 566 536
+    H 516
+    L 552 486
+    H 556
+    C 626 486 670 456 670 406
+    C 670 354 624 320 552 320
+    H 326
+    V 756
+    H 272
+    Z
+  " />
+
+  <!-- Inner F matching FramePilot's signature double-stem + 45-degree chamfer -->
+  <path fill="url(#fbGrad)" d="
+    M 366 368
+    H 564
+    V 420
+    H 420
+    V 486
+    H 518
+    L 482 536
+    H 420
+    V 756
+    H 366
+    Z
+  " />
+</svg>

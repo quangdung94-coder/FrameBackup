@@ -26,12 +26,14 @@ let mainWindow: BrowserWindow | null = null;
 let powerSaveId: number | null = null;
 
 function createWindow() {
+  const iconPath = path.join(__dirname, '../build', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
   mainWindow = new BrowserWindow({
     width: 1540,
     height: 920,
     minWidth: 1180,
     minHeight: 720,
     backgroundColor: '#121215',
+    icon: iconPath,
     title: 'FrameBackup — 4-Column Video & Photo Backup',
     autoHideMenuBar: true,
     webPreferences: {
