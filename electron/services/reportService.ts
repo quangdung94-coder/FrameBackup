@@ -184,10 +184,20 @@ function analyse(
     if (dr.error) autoNotes.push(`Lỗi upload Drive: ${dr.error}`);
   } else {
     const files = dr.files ?? d1.files;
-    const full = files >= d1.files;
-    const stats: LocationStats = full ? { ...d1 } : { files, bytes: dr.bytes ?? 0, byType: { ...d1.byType } };
+    const isPartialSelection = Boolean(req.selectedUploadOnly);
+    const expectedForDrive = isPartialSelection ? files : d1.files;
+    const full = isPartialSelection ? files > 0 : files >= d1.files;
+    const stats: LocationStats = !isPartialSelection && full ? { ...d1 } : { files, bytes: dr.bytes ?? 0, byType: { ...d1.byType } };
     if (!full) {
-      driveBox = { key: 'drive', title: 'Google Drive', state: 'error', stats, expectedFiles: expected, status: `✗ Thiếu ${d1.files - files} file`, path: drivePath };
+      driveBox = {
+        key: 'drive',
+        title: 'Google Drive',
+        state: 'error',
+        stats,
+        expectedFiles: expectedForDrive,
+        status: `✗ Thiếu ${d1.files - files} file`,
+        path: drivePath,
+      };
       problems.push(`Drive thiếu ${d1.files - files} file so với Ổ 1`);
     } else {
       driveBox = {
@@ -195,8 +205,12 @@ function analyse(
         title: 'Google Drive',
         state: d1Short ? 'warn' : 'ok',
         stats,
-        expectedFiles: expected,
-        status: d1Short ? '✓ Khớp Ổ 1, nhưng thiếu' : '✓ Khớp Ổ 1 (MD5)',
+        expectedFiles: expectedForDrive,
+        status: isPartialSelection
+          ? `✓ Đã up ${files} file chọn lọc (MD5)`
+          : d1Short
+          ? '✓ Khớp Ổ 1, nhưng thiếu'
+          : '✓ Khớp Ổ 1 (MD5)',
         path: drivePath,
       };
     }

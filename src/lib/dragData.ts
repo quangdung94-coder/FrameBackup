@@ -4,6 +4,8 @@ export const DRAG_TYPES = {
   cardFiles: 'application/x-framebackup-files',
   /** Cột 2 (Ổ 1) -> Cột 3 (Ổ 2) */
   drive1Files: 'application/x-framebackup-drive1',
+  /** Cột 3 (Ổ 2) -> Cột 4 (Google Drive) */
+  drive2Files: 'application/x-framebackup-drive2',
 } as const;
 
 export type DragType = (typeof DRAG_TYPES)[keyof typeof DRAG_TYPES];

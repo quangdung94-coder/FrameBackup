@@ -90,13 +90,14 @@ export function PipelineBar({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0">
           {isRunning && (
             <button
               onClick={onCancel}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/35 border border-red-500/50 text-red-200 text-xs font-bold transition"
+              title="Dừng ngay toàn bộ tiến trình đang chạy của thẻ này (Copy, Đóng gói 7z, Upload Google Drive, Watch Mode)"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 border border-red-400 text-white text-base font-extrabold shadow-lg shadow-red-950/60 transition"
             >
-              <Square className="w-3.5 h-3.5 fill-current" /> Dừng khẩn cấp
+              <Square className="w-5 h-5 fill-current" /> Dừng khẩn cấp
             </button>
           )}
           <button

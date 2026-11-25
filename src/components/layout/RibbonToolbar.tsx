@@ -128,18 +128,36 @@ export function RibbonToolbar({
             <option value="drive-report-only" className="bg-[#202024]">Chỉ tạo Drive Report</option>
           </select>
           {postAction !== 'drive-report-only' && (
-            <div className="inline-flex items-center gap-1 pl-2 border-l border-[#2e2e38] text-xs text-zinc-300">
-              <span className="text-zinc-500">Chờ</span>
-              <input
-                type="number"
-                min={1}
-                max={120}
-                value={postDelayMin}
-                onChange={(e) => onPostDelayMinChange(Math.max(1, Math.min(120, Number(e.target.value) || 1)))}
-                className="w-11 bg-[#1b1b22] border border-[#353542] rounded px-1.5 py-0.5 text-center text-xs text-amber-300 font-bold outline-none"
-                title="Số phút đếm ngược trước khi Sleep/Shutdown"
-              />
-              <span className="text-zinc-500">phút</span>
+            <div className="inline-flex items-center gap-1.5 pl-2.5 border-l border-[#2e2e38] text-xs text-zinc-300">
+              <span className="text-zinc-400 font-medium">Chờ</span>
+              <div className="inline-flex items-center rounded-md overflow-hidden border border-[#3e3e4d] bg-[#1b1b22]">
+                <button
+                  type="button"
+                  onClick={() => onPostDelayMinChange(Math.max(1, postDelayMin - 1))}
+                  className="w-7 h-7 inline-flex items-center justify-center text-sm font-bold text-zinc-300 hover:text-white hover:bg-[#2a2a36] transition select-none"
+                  title="Giảm 1 phút"
+                >
+                  −
+                </button>
+                <input
+                  type="number"
+                  min={1}
+                  max={120}
+                  value={postDelayMin}
+                  onChange={(e) => onPostDelayMinChange(Math.max(1, Math.min(120, Number(e.target.value) || 1)))}
+                  className="w-12 h-7 bg-transparent text-center text-[13px] text-amber-300 font-extrabold tabular-nums outline-none border-x border-[#2e2e38] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  title="Số phút đếm ngược trước khi Sleep/Shutdown (1–120 phút)"
+                />
+                <button
+                  type="button"
+                  onClick={() => onPostDelayMinChange(Math.min(120, postDelayMin + 1))}
+                  className="w-7 h-7 inline-flex items-center justify-center text-sm font-bold text-zinc-300 hover:text-white hover:bg-[#2a2a36] transition select-none"
+                  title="Tăng 1 phút"
+                >
+                  +
+                </button>
+              </div>
+              <span className="text-zinc-400 font-medium">phút</span>
             </div>
           )}
         </div>

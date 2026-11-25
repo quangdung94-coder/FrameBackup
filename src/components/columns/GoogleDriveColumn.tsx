@@ -1,7 +1,7 @@
-import { Cloud, Link2, LogIn, Upload } from 'lucide-react';
+import { Cloud, Link2, LogIn, RefreshCw } from 'lucide-react';
 import { formatBytes, type DriveAuthStatus, type DriveFolderCheckResult } from '../../types/framebackup';
 import { FileIcon, remoteFileMediaType } from '../FileIcon';
-import { ColumnFooter, ColumnHeader, InfoStrip, NavBar } from '../layout/ColumnParts';
+import { ColumnFooter, ColumnHeader, DropOverlay, InfoStrip, NavBar } from '../layout/ColumnParts';
 
 interface GoogleDriveColumnProps {
   style: React.CSSProperties;
@@ -12,16 +12,16 @@ interface GoogleDriveColumnProps {
   parsedFolderId: string | null;
   folderCheck: DriveFolderCheckResult | null;
   checkingLink: boolean;
-  /** Nút "Chỉ Up từ Ổ 1" bị khóa. */
-  uploadDisabled: boolean;
   onOpenAuth: () => void;
   onDriveLinkChange: (value: string) => void;
   onCheckLink: () => void;
-  onUploadFromDrive1: () => void;
-  /** v1.4: chọn / cấp quyền thư mục bằng Google Picker. */
-  /** @deprecated v1.4: gộp vào nút Check. */
-  onPickFolder?: () => void;
+  /** Làm mới danh sách file trên Google Drive (F5). */
+  onRefresh: () => void;
   picking?: boolean;
+  /** Kéo thả file từ Ổ 2 sang cột Drive. */
+  isDragOver?: boolean;
+  dragCount?: number;
+  dropHandlers?: Pick<React.HTMLAttributes<HTMLElement>, 'onDragEnter' | 'onDragOver' | 'onDragLeave' | 'onDrop'>;
   /** Chuột phải trong cột Drive. */
   onContextMenu?: (e: React.MouseEvent) => void;
 }
@@ -42,26 +42,47 @@ export function GoogleDriveColumn({
   parsedFolderId,
   folderCheck,
   checkingLink,
-  uploadDisabled,
   onOpenAuth,
   onDriveLinkChange,
   onCheckLink,
-  onUploadFromDrive1,
+  onRefresh,
   picking,
+  isDragOver,
+  dragCount = 0,
+  dropHandlers,
   onContextMenu,
 }: GoogleDriveColumnProps) {
   return (
     <section
+      {...dropHandlers}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key === 'F5') {
+          e.preventDefault();
+          if (driveAuth.signedIn && driveLink.trim() && !checkingLink) onRefresh();
+        }
+      }}
       onContextMenu={(e) => {
         // Ô nhập link giữ menu Cut / Copy / Paste của hệ thống
         if ((e.target as HTMLElement).closest('input, textarea')) return;
         onContextMenu?.(e);
       }}
       style={style}
-      className={`flex flex-col min-w-[160px] bg-[#18181c] border rounded-lg overflow-hidden ${
-        expanded ? 'border-purple-500' : 'border-[#2b2b34]'
+      className={`relative flex flex-col min-w-[160px] bg-[#18181c] border rounded-lg overflow-hidden outline-none ${
+        isDragOver
+          ? 'border-2 border-purple-400 ring-2 ring-purple-500/40'
+          : expanded
+          ? 'border-purple-500'
+          : 'border-[#2b2b34]'
       }`}
     >
+      {isDragOver && (
+        <DropOverlay
+          tone="purple"
+          title={`Thả vào đây để Up ${dragCount || 1} mục từ Ổ 2 lên Drive`}
+          subtitle="Resumable Upload · 3 luồng · Tự động so MD5"
+        />
+      )}
       <ColumnHeader
         index={4}
         title="GOOGLE DRIVE"
@@ -123,6 +144,14 @@ export function GoogleDriveColumn({
         >
           {checkingLink || picking ? '...' : 'Check'}
         </button>
+        <button
+          disabled={checkingLink || !driveAuth.signedIn || !driveLink.trim()}
+          onClick={onRefresh}
+          title="Làm mới danh sách file trên Google Drive (F5)"
+          className="p-1.5 rounded bg-[#23232a] hover:bg-[#32323c] disabled:opacity-35 border border-[#3e3e4b] text-zinc-200 shrink-0 transition"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${checkingLink ? 'animate-spin text-purple-300' : ''}`} />
+        </button>
       </NavBar>
       {(folderCheck?.needsPick || picking) && (
         <div className="px-2 py-2 bg-amber-950/40 border-b border-amber-800/50 text-[11px] text-amber-100">
@@ -142,7 +171,7 @@ export function GoogleDriveColumn({
             ? `📁 ${folderCheck.folderName}`
             : parsedFolderId
             ? `ID: ${parsedFolderId}`
-            : 'Resumable 16MB Chunk'}
+            : 'Resumable 32/64MB · 3 luồng'}
         </span>
         <span className="text-purple-300 shrink-0">+ Report & 2 Thumbs</span>
       </InfoStrip>
@@ -204,15 +233,8 @@ export function GoogleDriveColumn({
       </div>
 
       <ColumnFooter alignCenter>
-        <span>{folderCheck ? `${folderCheck.files.length} mục trên Drive` : 'Resumable Chunked'}</span>
-        <button
-          disabled={uploadDisabled}
-          onClick={onUploadFromDrive1}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-600/25 hover:bg-purple-600/45 disabled:opacity-35 border border-purple-500/40 text-purple-200 font-semibold transition"
-          title="Chạy riêng Bước 3 & 4 (Report + 2 Thumbnail + Upload Drive) từ thư mục đang chọn ở Ổ 1"
-        >
-          <Upload className="w-3 h-3" /> Chỉ Up từ Ổ 1
-        </button>
+        <span>{folderCheck ? `${folderCheck.files.length} mục trên Drive` : 'Chưa tải danh sách'}</span>
+        <span className="text-purple-300/80 text-[10.5px]">32/64MB · 3 luồng</span>
       </ColumnFooter>
     </section>
   );

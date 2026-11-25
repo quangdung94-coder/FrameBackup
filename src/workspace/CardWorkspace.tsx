@@ -7,7 +7,7 @@ import { GoogleDriveColumn } from '../components/columns/GoogleDriveColumn';
 import { CloudDriveWarningModal, type CloudWarning } from '../components/CloudDriveWarningModal';
 import { ConflictModal, type ConflictPrompt } from '../components/ConflictModal';
 import { DateMismatchAlert } from '../components/DateMismatchAlert';
-import { BottomPanelSplitter, CopyArrowSplitter, ResizeSplitter } from '../components/layout/Splitters';
+import { BottomPanelSplitter, CopyArrowSplitter } from '../components/layout/Splitters';
 import { InfoStrip } from '../components/layout/ColumnParts';
 import { PipelineBar } from '../components/PipelineBar';
 import { ReportPreviewModal } from '../components/ReportPreviewModal';
@@ -18,11 +18,9 @@ import { useLatestRef } from '../hooks/useLatestRef';
 import { buildDateGroups, countExtensions, countMismatchFiles, countSidecarXml, filterCardFiles, sumBytes } from '../lib/cardAnalysis';
 import { createDemoCardFiles } from '../lib/demo';
 import { DRAG_TYPES } from '../lib/dragData';
-import type { FileMenuActions } from '../lib/fileMenu';
 import { baseNameOf, folderCopyTarget, isDemoPath, isDriveRoot, isSameOrInside, parentDirOf, trimTrailingSeparators } from '../lib/paths';
 import { openContextMenu, type PathMenuActions } from '../lib/globalMenu';
 import type { ProgressStore } from '../lib/progressStore';
-import { buildDriveUploadItems, buildReportUploadItems } from '../lib/uploadPlan';
 import {
   CANCELLED,
   detectCloudStorage,
@@ -32,7 +30,6 @@ import {
   statsOf,
   toShowFolderName,
   type BackupReport,
-  type BuildReportRequest,
   type CardIngestRecord,
   type ConflictPolicy,
   type CopyVerifyRequest,
@@ -44,6 +41,8 @@ import {
   type PackMode,
   type ShotDatesEvent,
 } from '../types/framebackup';
+import { resolveEffectivePackMode, runPackUploadAndReport } from './driveUploadFlow';
+import { createWorkspaceMenus } from './workspaceMenus';
 import type { CardTab, SharedWorkspace, WorkspaceStatus } from './shared';
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -105,6 +104,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
 
   const [cardSelected, setCardSelected] = useState<Set<string>>(new Set());
   const [d1Selected, setD1Selected] = useState<Set<string>>(new Set());
+  const [d2Selected, setD2Selected] = useState<Set<string>>(new Set());
 
   const [conflictPrompt, setConflictPrompt] = useState<ConflictPrompt | null>(null);
   const conflictResolverRef = useRef<((policy: ConflictPolicy | null) => void) | null>(null);
@@ -550,103 +550,49 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
         await refreshDrive2View();
       }
 
-      // Bước 3: Thumbnail + thống kê Ổ 1 + đóng gói
-      progress.set({ step3: { jobId, status: 'scanning', percent: 5, message: 'Đang trích xuất Thumbnail Shot đầu & cuối...' } });
-      const media = await api.inspectAndBuildReport({ jobId, projectName: stagingName, sourceDir: sourceOnDrive1 });
-      setMediaReport(media);
-      const packRes = await api.packageForDrive({
+      // Bước 3 & 4: Thumbnail ➔ Đóng gói ➔ Upload Google Drive ➔ Báo cáo PDF/TXT (dùng chung)
+      const flow = await runPackUploadAndReport({
         jobId,
-        projectName: stagingName,
         sourceDir: sourceOnDrive1,
+        reportDrive1Dir: sourceOnDrive1,
+        reportDrive2Dir: d2Dir || undefined,
+        stagingName,
+        camFolder: t.camFolder,
         packMode: opts.packMode ?? sh.packMode,
-      });
-      if (!packRes.success) {
-        if (packRes.error !== CANCELLED) showToast(`❌ Lỗi đóng gói: ${packRes.error}`);
-        return;
-      }
-      if (packRes.archivePaths.length > 0 && packRes.looseFilePaths.length > 0) {
-        notes.push('Trên Drive: ảnh được gom vào 1 file Zip (không nén), video để lẻ giữ nguyên thư mục.');
-      } else if (packRes.archivePaths.length > 0) {
-        notes.push('Trên Drive: toàn bộ file nằm trong file nén (đã kiểm tra file nén bằng 7-Zip).');
-      }
-
-      // Bước 4: Upload Drive (thumbnail + file nén + file lẻ), báo cáo up SAU cùng
-      const folderId = parseGoogleDriveFolderId(sh.driveLink);
-      const canUpload = Boolean(folderId && sh.driveAuth.signedIn);
-      let driveInfo: BuildReportRequest['drive'] = { status: 'skipped' };
-      let targetFolderId: string | null = null;
-      let webLink: string | undefined;
-      if (canUpload && folderId) {
-        const upRes = await api.uploadToGoogleDrive({
-          jobId,
-          parentFolderId: folderId,
-          createProjectSubfolder: t.camFolder.trim() || undefined,
-          items: buildDriveUploadItems([media.firstShot, media.lastShot], packRes, sourceOnDrive1),
-          cleanupArchivePaths: packRes.archivePaths,
-        });
-        if (upRes.success) {
-          targetFolderId = upRes.targetFolderId;
-          webLink = upRes.webViewLink;
-          driveInfo = {
-            status: 'uploaded',
-            files: packRes.sourceFiles,
-            bytes: packRes.sourceBytes,
-            folderName: [sh.driveFolderCheck?.folderName, t.camFolder.trim()].filter(Boolean).join(' / ') || undefined,
-            link: upRes.webViewLink,
-          };
-          if (upRes.dedupedFiles) notes.push(`${upRes.dedupedFiles} file đã có sẵn trên Drive (cùng MD5) nên không up lại.`);
-        } else {
-          driveInfo = { status: upRes.error === CANCELLED ? 'cancelled' : 'failed', error: upRes.error };
-          if (upRes.error !== CANCELLED) showToast(`❌ Lỗi Upload Google Drive: ${upRes.error}`);
-        }
-      }
-
-      // Báo cáo cuối (đã biết số file trên Drive)
-      const report = await api.buildBackupReport({
-        jobId,
-        projectName: t.camFolder.trim() ? `${sh.projectName} · ${t.camFolder.trim()}` : sh.projectName,
-        shootDate: sh.targetDate,
-        drive1Dir: sourceOnDrive1,
-        drive2Dir: d2Dir || undefined,
+        shared: sh,
+        progress,
         card: opts.card,
         drive2VerifiedNow,
-        drive: driveInfo,
-        firstShot: media.firstShot,
-        lastShot: media.lastShot,
         notes: [
           ...(opts.skippedOldFiles ? [`Date Guard: đã bỏ ${opts.skippedOldFiles} file lệch ngày quay.`] : []),
           ...(opts.keptMismatchFiles ? [`Date Guard: đã xác nhận chép cả ${opts.keptMismatchFiles} file từ máy sai ngày/giờ.`] : []),
           ...notes,
         ],
-        stagingDir: media.stagingDir,
+        onMediaReport: setMediaReport,
+        onBackupReport: setBackupReport,
       });
-      setBackupReport(report);
-
-      if (targetFolderId) {
-        await api.uploadToGoogleDrive({ jobId, parentFolderId: targetFolderId, items: buildReportUploadItems(report) });
-        void sh.checkDriveLink(sh.driveLink, true);
-      }
+      if (flow.aborted || !flow.report || !flow.media || !flow.packRes || !flow.driveInfo) return;
 
       await sh.reloadSystem();
       await refreshDrive1View();
-      const ok = report.verdict === 'ok';
+      const ok = flow.report.verdict === 'ok';
       showToast(
-        driveInfo.status === 'uploaded'
-          ? `${ok ? '✅' : '⚠️'} ${report.headline} — đã up ${packRes.sourceFiles ?? 0} file + báo cáo PDF lên Drive.`
-          : `${ok ? '✅' : '⚠️'} ${report.headline}${canUpload ? '' : ' (chưa up Drive: đăng nhập & dán link ở Cột 4)'}`
+        flow.driveInfo.status === 'uploaded'
+          ? `${ok ? '✅' : '⚠️'} ${flow.report.headline} — đã up ${flow.packRes.sourceFiles ?? 0} file + báo cáo PDF lên Drive.`
+          : `${ok ? '✅' : '⚠️'} ${flow.report.headline}${flow.canUpload ? '' : ' (chưa up Drive: đăng nhập & dán link ở Cột 4)'}`
       );
-      if (driveInfo.status === 'failed' || driveInfo.status === 'cancelled') return;
+      if (flow.driveInfo.status === 'failed' || flow.driveInfo.status === 'cancelled') return;
       sh.finishJob(
         jobId,
         {
           projectName: t.camFolder.trim() ? `${show} / ${t.camFolder.trim()}` : show,
-          totalFiles: media.totalFiles,
-          totalBytes: media.totalBytes,
+          totalFiles: flow.media.totalFiles,
+          totalBytes: flow.media.totalBytes,
           drive1Path: sourceOnDrive1,
-          drive2BackedUp: drive2VerifiedNow || report.boxes[2]?.state === 'ok',
-          driveUploaded: driveInfo.status === 'uploaded',
-          driveWebLink: webLink,
-          verdict: report.verdict,
+          drive2BackedUp: drive2VerifiedNow || flow.report.boxes[2]?.state === 'ok',
+          driveUploaded: flow.driveInfo.status === 'uploaded',
+          driveWebLink: flow.webLink,
+          verdict: flow.report.verdict,
         },
         (opts.allowPowerAction ?? true) && ok
       );
@@ -789,12 +735,94 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     setMediaReport(null);
     setBackupReport(null);
     await keepAwake();
-    const packMode: PackMode = shared.uploadPack === 'none' ? 'none' : shared.packMode === 'none' ? 'video-raw-smart' : shared.packMode;
+    const packMode = resolveEffectivePackMode(shared.uploadPack, shared.packMode);
     await runAfterDrive1(source, {
       skipStep2: true,
       packMode,
-      notes: [`Chạy "Chỉ Up Drive" từ ${source} (${packMode === 'none' ? 'không nén' : 'có nén'}), không chép lại Ổ 2.`],
+      notes: [`Chạy "Ổ 1 ➔ Drive" từ ${source} (${packMode === 'none' ? 'không nén' : 'có nén'}), không chép lại Ổ 2.`],
     });
+  };
+
+  // ---- ☁ Upload từ Ổ 2 lên Google Drive (nút dọc tím, kéo thả, chuột phải) ----
+  const handleUploadFromDrive2 = async (overrideSelectedPaths?: string[]) => {
+    const api = window.frameBackup;
+    if (!api) return;
+    if (!drive2View) {
+      showToast('Hãy mở thư mục cần up ở Ổ 2 (Cột 3).');
+      return;
+    }
+    const folderId = parseGoogleDriveFolderId(shared.driveLink);
+    if (!shared.driveAuth.signedIn || !folderId) {
+      showToast('Hãy đăng nhập Google Drive và dán link thư mục Drive ở Cột 4 trước.');
+      return;
+    }
+    if (isBusy()) return;
+
+    const pathsToUse = overrideSelectedPaths ?? Array.from(d2Selected);
+    const packMode = resolveEffectivePackMode(shared.uploadPack, shared.packMode);
+    const baseRoot = trimTrailingSeparators(drive2View) || drive2View;
+
+    // Không chọn mục lẻ => up cả thư mục đang mở ở Ổ 2 (kèm Thumbnail + Nén/Không nén + Báo cáo PDF)
+    if (pathsToUse.length === 0) {
+      progress.set({ step1: null, step2: null, step3: null, step4: null, watch: null });
+      setMediaReport(null);
+      setBackupReport(null);
+      await keepAwake();
+      await runAfterDrive1(baseRoot, {
+        skipStep2: true,
+        packMode,
+        notes: [`Upload thẳng từ Ổ 2 (${baseRoot}, ${packMode === 'none' ? 'không nén' : 'có nén'}) lên Google Drive.`],
+      });
+      return;
+    }
+
+    // Có chọn mục cụ thể ở Ổ 2 => dùng chung luồng Thumbnail + Đóng gói + Upload + Báo cáo PDF/TXT
+    const end = await beginRun();
+    if (!end) return;
+    progress.set({ step3: null, step4: null });
+    setMediaReport(null);
+    setBackupReport(null);
+    try {
+      await keepAwake();
+      const stagingName = tab.camFolder.trim() ? `${showName}_${tab.camFolder.trim()}` : showName;
+      const flow = await runPackUploadAndReport({
+        jobId,
+        sourceDir: baseRoot,
+        reportDrive1Dir: drive1View || baseRoot,
+        reportDrive2Dir: baseRoot,
+        stagingName,
+        camFolder: tab.camFolder,
+        packMode,
+        selectedFilePaths: pathsToUse,
+        shared,
+        progress,
+        drive2VerifiedNow: false,
+        notes: [
+          `Upload trực tiếp ${pathsToUse.length} mục đã chọn từ Ổ 2 (${baseRoot}, ${
+            packMode === 'none' ? 'không nén' : 'có nén'
+          }) lên Google Drive.`,
+        ],
+        onMediaReport: setMediaReport,
+        onBackupReport: setBackupReport,
+      });
+      if (flow.emptySelection) {
+        showToast('Không có file nào trong các mục đang chọn ở Ổ 2 để upload.');
+        return;
+      }
+      if (flow.aborted || !flow.driveInfo || !flow.packRes) return;
+      if (flow.driveInfo.status === 'uploaded') {
+        await shared.reloadSystem();
+        showToast(
+          `✅ Đã upload ${flow.packRes.sourceFiles ?? 0} file từ Ổ 2 (${
+            packMode === 'none' ? 'không nén' : 'có nén'
+          }) + báo cáo PDF & 2 Thumbnail lên Google Drive!`
+        );
+      }
+    } catch (err) {
+      showToast(`❌ Lỗi Upload từ Ổ 2 lên Drive: ${errorText(err)}`);
+    } finally {
+      end();
+    }
   };
 
   // ---- Chép lẻ: Thẻ ➔ Ổ 1, Ổ 1 ➔ Ổ 2 (nút ➔, kéo thả, chuột phải) ----
@@ -1056,79 +1084,37 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     else drive2Nav.go(picked);
   };
 
-  // Kéo & thả: Thẻ -> Ổ 1, Ổ 1 -> Ổ 2
+  // Kéo & thả: Thẻ -> Ổ 1, Ổ 1 -> Ổ 2, Ổ 2 -> Drive
   const drive1Drop = useDropZone(DRAG_TYPES.cardFiles, (paths) => void handleCopyCardToDrive1Only(paths));
   const drive2Drop = useDropZone(DRAG_TYPES.drive1Files, (paths) => void handleCopyDrive1ToDrive2Only(paths));
-
-  const navigateCard = cardNav.go;
-  const navigateDrive1 = drive1Nav.go;
-  const navigateDrive2 = drive2Nav.go;
+  const driveDrop = useDropZone(DRAG_TYPES.drive2Files, (paths) => void handleUploadFromDrive2(paths));
 
   // ---- Menu chuột phải / mở file ----
-  const copyPathsToClipboard = (paths: string[]) => {
-    void navigator.clipboard
-      .writeText(paths.join('\n'))
-      .then(() => showToast(paths.length > 1 ? `Đã sao chép ${paths.length} đường dẫn.` : 'Đã sao chép đường dẫn.'))
-      .catch(() => showToast('Không sao chép được vào clipboard.'));
-  };
-  const openEntry = (file: FileEntry, navigate: (dir: string) => void) => {
-    if (file.isDirectory) {
-      navigate(file.fullPath);
-      return;
-    }
-    if (!window.frameBackup || isDemoPath(file.fullPath)) return;
-    void window.frameBackup.openPath(file.fullPath).then((r) => {
-      if (!r.ok) showToast(`Không mở được file: ${r.message}`);
-    });
-  };
-  const revealEntry = (fullPath: string) => {
-    if (!window.frameBackup || isDemoPath(fullPath)) return;
-    void window.frameBackup.showInFolder(fullPath);
-  };
   const busy = isRunning || waitingSlot;
-  const cardMenuActions: Omit<FileMenuActions, 'selectAll' | 'clear'> = {
-    open: (f) => openEntry(f, navigateCard),
-    reveal: revealEntry,
-    currentDir: isDemoPath(cardPath) ? undefined : cardPath || undefined,
-    refresh: cardPath && !isDemoPath(cardPath) ? () => void refreshCardSmart(cardPath) : undefined,
-    transfer: {
-      label: (n) => `Copy ${n} item${n > 1 ? 's' : ''} to Drive 1 (verify XXHash64)`,
-      run: (paths) => void handleCopyCardToDrive1Only(paths),
-      disabled: busy,
-    },
-    copyPaths: copyPathsToClipboard,
-    copyItems: (paths) => copyToClip('card', paths),
-    properties: isDemoPath(cardPath) ? undefined : openProperties,
-  };
-  const drive1MenuActions: Omit<FileMenuActions, 'selectAll' | 'clear'> = {
-    open: (f) => openEntry(f, navigateDrive1),
-    reveal: revealEntry,
-    currentDir: drive1View || undefined,
-    refresh: drive1View ? () => void refreshDrive1View() : undefined,
-    transfer: {
-      label: (n) => `Back up ${n} item${n > 1 ? 's' : ''} to Drive 2 (verify XXHash64)`,
-      run: (paths) => void handleCopyDrive1ToDrive2Only(paths),
-      disabled: busy || !drive2View,
-    },
-    copyPaths: copyPathsToClipboard,
-    copyItems: (paths) => copyToClip('d1', paths),
-    paste: { ...pasteLabel('d1'), run: () => pasteInto('d1') },
-    newFolder: drive1View ? () => openNewFolder('d1') : undefined,
-    rename: (f) => openRename('d1', f),
-    properties: openProperties,
-  };
-  const drive2MenuActions: Omit<FileMenuActions, 'selectAll' | 'clear'> = {
-    open: (f) => openEntry(f, navigateDrive2),
-    reveal: revealEntry,
-    currentDir: drive2View || undefined,
-    refresh: drive2View ? () => void refreshDrive2View() : undefined,
-    copyPaths: copyPathsToClipboard,
-    copyItems: (paths) => copyToClip('d2', paths),
-    paste: { ...pasteLabel('d2'), run: () => pasteInto('d2') },
-    newFolder: drive2View ? () => openNewFolder('d2') : undefined,
-    rename: (f) => openRename('d2', f),
-    properties: openProperties,
-  };
+  const { cardMenuActions, drive1MenuActions, drive2MenuActions, buildDriveColumnMenu } = createWorkspaceMenus({
+    busy,
+    cardPath,
+    drive1View,
+    drive2View,
+    d2SelectedCount: d2Selected.size,
+    shared,
+    navigateCard: cardNav.go,
+    navigateDrive1: drive1Nav.go,
+    navigateDrive2: drive2Nav.go,
+    refreshCardSmart,
+    refreshDrive1View,
+    refreshDrive2View,
+    onCopyCardToDrive1: (paths) => void handleCopyCardToDrive1Only(paths),
+    onCopyDrive1ToDrive2: (paths) => void handleCopyDrive1ToDrive2Only(paths),
+    onUploadFromDrive2: (paths) => void handleUploadFromDrive2(paths),
+    onUploadOnly: () => void handleUploadOnly(),
+    copyToClip,
+    pasteLabel,
+    pasteInto,
+    openNewFolder,
+    openRename,
+    openProperties,
+  });
 
   const copyCount = cardSelected.size > 0 ? cardSelected.size : displayedFileList.length;
   const copyBytes = cardSelected.size > 0 ? selectedCardBytes : totalCardBytes;
@@ -1173,35 +1159,45 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
 
         <span className="flex-1" />
 
-        <div className="h-10 inline-flex items-stretch rounded-lg overflow-hidden border border-purple-400/60 shadow-lg shadow-purple-950/40">
-          <button
-            disabled={busy}
-            onClick={() => void handleUploadOnly()}
-            className="inline-flex items-center gap-2 px-4 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold text-sm"
-            title="Bỏ qua Thẻ ➔ Ổ 1 và Ổ 1 ➔ Ổ 2: chỉ Thumbnail + (Nén) + Up Drive + Báo cáo, từ thư mục đang mở ở Ổ 1"
-          >
-            <CloudUpload className="w-4 h-4" /> CHỈ UP DRIVE
-          </button>
-          <div className="flex items-center bg-[#2a1f3d] text-[11.5px]">
-            {(['pack', 'none'] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => shared.setUploadPack(v)}
-                className={`h-full px-2.5 font-semibold ${
-                  shared.uploadPack === v ? 'bg-purple-500/45 text-white' : 'text-purple-200/70 hover:text-white'
-                }`}
-                title={
-                  v === 'pack'
-                    ? `Nén theo kiểu ở thanh trên (${shared.packMode === 'none' ? 'Video lẻ | Ảnh: Zip Store' : 'đang chọn'})`
-                    : 'Không nén: up nguyên file gốc, giữ cấu trúc thư mục'
-                }
-              >
-                {v === 'pack' ? 'Nén' : 'Không nén'}
-              </button>
-            ))}
-          </div>
+        {/* 1. Chế độ nén khi Upload Drive (áp dụng cho cả Ổ 1 ➔ Drive và Ổ 2 ➔ Drive) */}
+        <div
+          className="h-10 inline-flex items-center rounded-lg overflow-hidden border border-[#3a3a46] bg-[#14141a] text-xs"
+          title="Chọn chế độ đóng gói khi bấm Ổ 1 ➔ Drive hoặc Up lên Drive (cả thư mục)"
+        >
+          <span className="px-2.5 text-zinc-400 font-semibold border-r border-[#2b2b34] h-full inline-flex items-center">
+            Up Drive:
+          </span>
+          {(['pack', 'none'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => shared.setUploadPack(v)}
+              className={`h-full px-3 font-bold transition ${
+                shared.uploadPack === v
+                  ? 'bg-purple-600/45 text-white'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-white/5'
+              }`}
+              title={
+                v === 'pack'
+                  ? `Có nén: đóng gói theo kiểu ở thanh trên (${shared.packMode === 'none' ? 'Video lẻ | Ảnh: Zip Store' : shared.packMode})`
+                  : 'Không nén: upload nguyên file gốc, giữ nguyên thư mục'
+              }
+            >
+              {v === 'pack' ? 'Có nén' : 'Không nén'}
+            </button>
+          ))}
         </div>
 
+        {/* 2. Chỉ Upload từ Ổ 1 lên Drive (bỏ qua Thẻ & Ổ 2) */}
+        <button
+          disabled={busy}
+          onClick={() => void handleUploadOnly()}
+          className="h-10 inline-flex items-center gap-2 px-4 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 border border-purple-400/60 text-white font-bold text-sm shadow-lg shadow-purple-950/40 transition"
+          title="Chỉ upload thẳng từ thư mục đang mở ở Ổ 1 lên Google Drive (KHÔNG chép Thẻ, KHÔNG qua Ổ 2). Có tạo Báo cáo PDF + 2 Thumbnail."
+        >
+          <CloudUpload className="w-4 h-4" /> Ổ 1 ➔ Drive
+        </button>
+
+        {/* 3. Chạy tự động toàn bộ chuỗi 4 cột */}
         {watching ? (
           <button
             onClick={() => window.frameBackup?.triggerWatchNow(jobId)}
@@ -1214,6 +1210,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
           <button
             disabled={busy}
             onClick={() => void handleRunFullPipeline()}
+            title="Chạy tự động trọn gói cả 4 cột: Thẻ nhớ ➔ Ổ 1 ➔ Ổ 2 ➔ Google Drive (+ Báo cáo PDF & Sleep/Shutdown nếu bật)"
             className="h-10 inline-flex items-center gap-2 px-5 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 hover:brightness-110 disabled:opacity-50 border border-blue-400/70 text-white font-bold text-sm shadow-lg shadow-blue-950/60 transition"
           >
             {cardMode === 'watch' ? <Eye className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
@@ -1224,8 +1221,8 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
               : cardMode === 'watch'
               ? 'BẮT ĐẦU CANH Ổ 1'
               : multiCard
-              ? 'CHẠY THẺ NÀY'
-              : 'CHẠY TOÀN BỘ CHUỖI'}
+              ? 'CHẠY CẢ CHUỖI THẺ NÀY'
+              : 'CHẠY CẢ CHUỖI (1➔2➔3➔4)'}
           </button>
         )}
       </div>
@@ -1374,10 +1371,27 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
           pathActions={pathActionsFor('d2')}
           onPickFolder={() => handlePickFolder(3)}
           menuActions={drive2MenuActions}
+          onSelectedChange={setD2Selected}
+          dragType={DRAG_TYPES.drive2Files}
           footerRight={<span className="text-emerald-400">Backup</span>}
         />
 
-        <ResizeSplitter onResizeStart={(e) => layout.startHorizontalResize(2, e)} onReset={layout.resetColumns} />
+        <CopyArrowSplitter
+          tone="purple"
+          title="Bấm nút ➔ để Upload từ Ổ 2 lên Google Drive • Kéo thanh này để chỉnh độ rộng cột"
+          label="Up lên Drive"
+          detail={d2Selected.size > 0 ? `${d2Selected.size} mục` : 'Cả thư mục'}
+          sub={shared.uploadPack === 'none' ? 'Không nén' : 'Có nén'}
+          buttonTitle={
+            d2Selected.size > 0
+              ? `Upload ${d2Selected.size} mục đang chọn ở Ổ 2 lên Google Drive (${shared.uploadPack === 'none' ? 'Không nén' : 'Có nén'})`
+              : `Upload cả thư mục đang mở ở Ổ 2 (${drive2View || 'chưa chọn'}) lên Google Drive (${shared.uploadPack === 'none' ? 'Không nén' : 'Có nén'})`
+          }
+          disabled={busy || !drive2View || !shared.driveAuth.signedIn || !parseGoogleDriveFolderId(shared.driveLink)}
+          onResizeStart={(e) => layout.startHorizontalResize(2, e)}
+          onReset={layout.resetColumns}
+          onCopy={() => void handleUploadFromDrive2()}
+        />
 
         <GoogleDriveColumn
           style={layout.columnStyle(4)}
@@ -1388,44 +1402,15 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
           parsedFolderId={parseGoogleDriveFolderId(shared.driveLink)}
           folderCheck={shared.driveFolderCheck}
           checkingLink={shared.checkingDriveLink}
-          uploadDisabled={busy}
           onOpenAuth={shared.openDriveAuth}
           onDriveLinkChange={shared.setDriveLink}
           onCheckLink={() => void shared.checkDriveAccess()}
-          onUploadFromDrive1={() => void handleUploadOnly()}
-          onPickFolder={() => void shared.pickDriveFolder()}
+          onRefresh={() => void shared.checkDriveLink(shared.driveLink, false)}
           picking={shared.pickingDriveFolder}
-          onContextMenu={(e) => {
-            const api = window.frameBackup;
-            const link = shared.driveLink.trim();
-            const signedIn = shared.driveAuth.signedIn;
-            openContextMenu(e, [
-              { label: 'Open folder in browser', disabled: !link, onSelect: () => void api?.openExternalUrl(link) },
-              {
-                label: 'Copy folder link',
-                disabled: !link,
-                onSelect: () => void navigator.clipboard?.writeText(link).then(() => showToast('Đã sao chép link thư mục Drive.')),
-              },
-              { label: 'Check access', disabled: !link || !signedIn, onSelect: () => void shared.checkDriveLink() },
-              { label: 'Choose Drive folder…', disabled: !signedIn, onSelect: () => void shared.pickDriveFolder() },
-              {
-                label: 'Upload Drive 1 folder',
-                separatorBefore: true,
-                disabled: busy || !signedIn || !link || !drive1View,
-                onSelect: () => void handleUploadOnly(),
-              },
-              { label: signedIn ? 'Switch Google account' : 'Sign in to Google', separatorBefore: true, onSelect: shared.openDriveAuth },
-              {
-                label: 'Sign out',
-                disabled: !signedIn,
-                onSelect: () =>
-                  void api?.signOutGoogleDrive().then(() => {
-                    showToast('Đã đăng xuất Google Drive.');
-                    void shared.reloadSystem();
-                  }),
-              },
-            ]);
-          }}
+          isDragOver={driveDrop.isOver}
+          dragCount={d2Selected.size}
+          dropHandlers={driveDrop.handlers}
+          onContextMenu={(e) => openContextMenu(e, buildDriveColumnMenu())}
         />
       </div>
 

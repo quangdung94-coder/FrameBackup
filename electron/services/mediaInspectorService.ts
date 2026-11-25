@@ -1,10 +1,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import exifr from 'exifr';
-import ffmpegPathRaw from 'ffmpeg-static';
-import { resolveUnpackedBinary } from '../lib/binaries';
-import { execFileAsync } from '../lib/exec';
 import { osStagingDir } from '../lib/tempFiles';
+import { extractImageThumb, extractVideoThumb } from '../lib/thumbnail';
 import { formatDateTime, formatTimeTag } from '../shared/dates';
 import { formatBytes } from '../shared/format';
 import { toSafeAsciiName } from '../shared/paths';
@@ -13,54 +10,6 @@ import type { InspectReportRequest, MediaReportResult, ShotInfo } from '../share
 import { scanFilesRecursive, type FileEntry } from './diskService';
 
 export type { InspectReportRequest, MediaReportResult, ShotInfo } from '../shared/types';
-
-const ffmpegPath = resolveUnpackedBinary(ffmpegPathRaw);
-
-async function extractVideoThumbnail(videoPath: string, outJpgPath: string): Promise<boolean> {
-  if (!ffmpegPath) return false;
-  const runFfmpeg = async (seekSec: string) => {
-    await execFileAsync(
-      ffmpegPath!,
-      ['-ss', seekSec, '-i', videoPath, '-vframes', '1', '-vf', 'scale=640:-1', '-q:v', '3', '-y', outJpgPath],
-      { windowsHide: true, timeout: 25000 }
-    );
-  };
-  try {
-    await runFfmpeg('00:00:01');
-    return true;
-  } catch {
-    try {
-      await runFfmpeg('00:00:00');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
-
-async function extractImageThumbnail(imagePath: string, outJpgPath: string): Promise<boolean> {
-  try {
-    const thumbBuf = await exifr.thumbnail(imagePath);
-    if (thumbBuf && thumbBuf.length > 0) {
-      await fsp.writeFile(outJpgPath, thumbBuf);
-      return true;
-    }
-  } catch {
-    // Fallback to ffmpeg below
-  }
-
-  if (!ffmpegPath) return false;
-  try {
-    await execFileAsync(
-      ffmpegPath,
-      ['-i', imagePath, '-vframes', '1', '-vf', 'scale=640:-1', '-q:v', '3', '-y', outJpgPath],
-      { windowsHide: true, timeout: 20000 }
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function generateShotThumbnail(
   file: FileEntry,
@@ -74,8 +23,8 @@ async function generateShotThumbnail(
 
   const ok =
     file.mediaType === 'video'
-      ? await extractVideoThumbnail(file.fullPath, outPath)
-      : await extractImageThumbnail(file.fullPath, outPath);
+      ? await extractVideoThumb(file.fullPath, outPath, { width: 640, quality: 3, seekSec: 1 })
+      : await extractImageThumb(file.fullPath, outPath, { width: 640, quality: 3 });
 
   if (!ok) return {};
 
@@ -166,7 +115,7 @@ export async function inspectAndBuildReport(req: InspectReportRequest): Promise<
   const reportFileName = '_00_BACKUP_REPORT.txt';
   const reportFilePath = path.join(stagingDir, reportFileName);
   const reportText = lines.join('\n');
-  await fsp.writeFile(reportFilePath, reportText, 'utf8');
+  // Không ghi đĩa ở đây vì reportService.ts sẽ ghi bản báo cáo 4 ô chính thức (PDF + TXT) sau khi upload xong.
 
   return {
     projectName: req.projectName,

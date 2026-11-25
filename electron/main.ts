@@ -97,11 +97,16 @@ if (!gotSingleInstanceLock) {
   });
 }
 
-app.on('window-all-closed', async () => {
+app.on('before-quit', () => {
   stopDriveWatcher();
+  flushShotDateCache();
+});
+
+app.on('window-all-closed', async () => {
   flushShotDateCache();
   await shutdownBackgroundJobs();
   if (process.platform !== 'darwin') {
+    stopDriveWatcher();
     app.quit();
   }
 });

@@ -96,7 +96,17 @@ export async function packageForDrive(
 
   try {
     onProgress({ status: 'scanning', percent: 5, message: 'Đang phân loại Video / Ảnh để đóng gói...' });
-    const allFiles = await scanFilesRecursive(req.sourceDir, false);
+    const scannedFiles = await scanFilesRecursive(req.sourceDir, false);
+    const hasSelection = Boolean(req.selectedFilePaths && req.selectedFilePaths.length > 0);
+    const selectedNorms = hasSelection
+      ? req.selectedFilePaths!.map((p) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase())
+      : null;
+    const allFiles = selectedNorms
+      ? scannedFiles.filter((f) => {
+          const norm = path.resolve(f.fullPath).toLowerCase();
+          return selectedNorms.some((sel) => norm === sel || norm.startsWith(sel + path.sep));
+        })
+      : scannedFiles;
     const sourceInfo = { sourceFiles: allFiles.length, sourceBytes: allFiles.reduce((s, f) => s + f.sizeBytes, 0) };
 
     if (req.packMode === 'none') {
@@ -171,15 +181,24 @@ export async function packageForDrive(
       };
     }
 
-    // 'zip-store' or '7z' for entire folder
+    // 'zip-store' or '7z' for entire folder (or selected subset)
     const is7z = req.packMode === '7z';
     const archivePath = path.join(stagingDir, is7z ? `${safeProj}.7z` : `${safeProj}_Store.zip`);
     currentArchivePath = archivePath;
     await unlinkQuietly(archivePath);
 
+    let targetArg = '.';
+    if (hasSelection) {
+      tempListFile = await writeTempListFile(
+        'fb_pack',
+        allFiles.map((f) => f.relativePath)
+      );
+      targetArg = `@${tempListFile}`;
+    }
+
     const args = is7z
-      ? ['a', '-t7z', '-mx=5', '-bsp1', archivePath, '.']
-      : ['a', '-tzip', '-mx=0', '-bsp1', archivePath, '.'];
+      ? ['a', '-t7z', '-mx=5', '-bsp1', archivePath, targetArg]
+      : ['a', '-tzip', '-mx=0', '-bsp1', archivePath, targetArg];
 
     onProgress({
       status: 'packing',

@@ -194,7 +194,7 @@ export function DriveColumn(props: DriveColumnProps) {
         }
         tone={isD1 ? 'emerald' : 'teal'}
         dragType={props.dragType}
-        nameHeader={isD1 ? 'Tên (Kéo sang Ổ 2)' : 'Tên'}
+        nameHeader={isD1 ? 'Tên (Kéo sang Ổ 2)' : 'Tên (Kéo sang Drive)'}
         flatLoading={pane.flatLoading}
         empty={
           <EmptyState

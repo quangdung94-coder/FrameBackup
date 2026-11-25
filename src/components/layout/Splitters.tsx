@@ -9,6 +9,10 @@ const COPY_TONE = {
     rail: 'group-hover:bg-emerald-500/60',
     button: 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-950/60',
   },
+  purple: {
+    rail: 'group-hover:bg-purple-500/60',
+    button: 'bg-purple-600 hover:bg-purple-500 shadow-purple-950/60',
+  },
 } as const;
 
 interface CopyArrowSplitterProps {
@@ -57,22 +61,6 @@ export function CopyArrowSplitter({ tone, title, buttonTitle, label, detail, sub
         {sub && <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] whitespace-nowrap text-white/70 max-h-28 truncate">{sub}</span>}
       </button>
       {rail}
-    </div>
-  );
-}
-
-/** Thanh kéo đổi độ rộng cột không có nút copy (giữa Ổ 2 và Drive). */
-export function ResizeSplitter({ onResizeStart, onReset }: { onResizeStart: (e: React.MouseEvent) => void; onReset: () => void }) {
-  return (
-    <div
-      onMouseDown={onResizeStart}
-      onDoubleClick={onReset}
-      title="Kéo trái/phải để chỉnh độ rộng cột • Double-click để chia đều"
-      className="w-3.5 cursor-col-resize flex items-center justify-center shrink-0 group select-none"
-    >
-      <div className="w-1 h-14 rounded-full bg-[#2e2e38] group-hover:bg-purple-500 group-hover:h-24 transition-all flex items-center justify-center">
-        <ArrowRight className="w-3 h-3 text-purple-400 opacity-0 group-hover:opacity-100" />
-      </div>
     </div>
   );
 }

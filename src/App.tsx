@@ -36,7 +36,7 @@ import {
   type SystemInfo,
 } from './types/framebackup';
 import { CardWorkspace } from './workspace/CardWorkspace';
-import type { CardTab, SharedWorkspace, UploadPackChoice, WorkspaceStatus } from './workspace/shared';
+import { BACKUP_HISTORY_LIMIT, type CardTab, type SharedWorkspace, type UploadPackChoice, type WorkspaceStatus } from './workspace/shared';
 
 const isHistoryList = (v: unknown): v is BackupHistoryItem[] => Array.isArray(v);
 
@@ -126,7 +126,7 @@ export default function App() {
       [STORAGE_KEYS.uploadOnlyPack]: uploadPack,
       [STORAGE_KEYS.postAction]: postAction,
       [STORAGE_KEYS.postDelayMin]: postDelayMin,
-      [STORAGE_KEYS.backupHistory]: historyItems.slice(0, 100),
+      [STORAGE_KEYS.backupHistory]: historyItems.slice(0, BACKUP_HISTORY_LIMIT),
       [STORAGE_KEYS.visibleExts]: visibleExtensions,
       [STORAGE_KEYS.includeSidecarXml]: includeSidecarXml,
     });
@@ -338,7 +338,7 @@ export default function App() {
   const finishJob = useCallback(
     (tabId: string, entry: Omit<BackupHistoryItem, 'id' | 'completedAt'>, allowPowerAction: boolean) => {
       const item: BackupHistoryItem = { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, completedAt: Date.now(), ...entry };
-      setHistoryItems((prev) => [item, ...prev.slice(0, 99)]);
+      setHistoryItems((prev) => [item, ...prev.slice(0, BACKUP_HISTORY_LIMIT - 1)]);
       if (!allowPowerAction) {
         if (postActionRef.current !== 'drive-report-only') {
           showToast('⚠️ Báo cáo chưa "AN TOÀN" — không tự Sleep/Shutdown. Hãy xem báo cáo.');

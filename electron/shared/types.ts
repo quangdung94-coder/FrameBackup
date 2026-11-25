@@ -51,6 +51,7 @@ export interface SystemInfo {
   arch: string;
   hostname: string;
   preventSleepActive: boolean;
+  appVersion?: string;
 }
 
 export interface CopyVerifyRequest {
@@ -207,6 +208,8 @@ export interface PackageRequest {
   projectName: string;
   sourceDir: string;
   packMode: PackMode;
+  /** Nếu truyền, chỉ đóng gói đúng các file / thư mục con được chọn trong `sourceDir`. */
+  selectedFilePaths?: string[];
 }
 
 export interface PackageProgressEvent {
@@ -374,6 +377,8 @@ export interface BuildReportRequest {
   card?: CardIngestRecord;
   /** Ổ 2 vừa được sao lưu + verify trong lượt này. */
   drive2VerifiedNow?: boolean;
+  /** true khi người dùng chỉ chọn upload một phần file/thư mục con (không phải toàn bộ thư mục gốc). */
+  selectedUploadOnly?: boolean;
   drive: {
     status: 'uploaded' | 'failed' | 'cancelled' | 'skipped';
     /** Số file của Ổ 1 đã nằm trên Drive (trong file nén hoặc file lẻ). */

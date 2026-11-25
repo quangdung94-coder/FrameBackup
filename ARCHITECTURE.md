@@ -1,27 +1,26 @@
-# Kiến trúc Kỹ thuật (Architecture)
+# Kiến trúc Kỹ thuật (Architecture — v1.4.0)
 
 ## 1. Tổng quan Hệ thống
 
-Ứng dụng được xây dựng theo mô hình **Electron Multi-Process** để đảm bảo giao diện (Renderer) luôn mượt mà ngay cả khi đang copy hàng trăm GB video hoặc quét hàng nghìn file ảnh RAW:
+Ứng dụng xây dựng theo mô hình **Electron Multi-Process** (Main Node.js async I/O + Child Processes `ffmpeg`, `7za`, TeraCopy/FastCopy/rsync + Renderer React):
 
 ```text
 +-------------------------------------------------------------------+
 |                   Renderer Process (React + TS)                   |
-|  4-Column UI • Date Guard Alert • Storage Bars • Report Preview   |
+|  Multi-Card Tabs • 4-Column Explorer UI • Preview & ProgressBar   |
 +---------------------------------+---------------------------------+
                                   | IPC (ContextBridge / Preload)
 +---------------------------------v---------------------------------+
 |                     Main Process (Node.js)                        |
-|  Job Orchestrator • Power Manager (Prevent Sleep / Shutdown)      |
-|  Drive OAuth Manager • Telegram / Email Notifier                  |
+|  IPC Handlers (system, disk, pipeline, drive) • PowerSaveBlocker  |
+|  Drive Watcher • ShotDate Cache • Verify Ledger                   |
 +--------+--------------------+--------------------+----------------+
          |                    |                    |
 +--------v-------+   +--------v-------+   +--------v----------------+
-| Ingest & Copy  |   | Media & Pack   |   | Cloud Upload Worker     |
-| Worker Thread  |   | Worker Thread  |   | (Google Drive API v3)   |
-| • Date Check   |   | • EXIF / FFmpeg|   | • Resumable Chunked Up  |
-| • XXHash64     |   | • Thumbs Gen   |   | • Auto-Retry / Backoff  |
-| • Watch Mode   |   | • 7zip-bin     |   | • _BACKUP_REPORT.txt    |
+| Copy & Verify  |   | Media & Pack   |   | Google Drive API v3     |
+| • copyPlan     |   | • EXIF / FFmpeg|   | • OAuth PKCE + Picker   |
+| • XXHash64     |   | • Thumbs Cache |   | • 32/64MB x3 Parallel   |
+| • Watch Mode   |   | • 7zip-bin     |   | • MD5 Check & PDF/TXT   |
 +----------------+   +----------------+   +-------------------------+
 ```
 
@@ -29,76 +28,33 @@
 
 ## 2. Chi tiết các Module Chính
 
-### 2.1. Date Guard Engine (Kiểm tra Lệch ngày)
-- **Độ ưu tiên đọc ngày gốc của file**:
-  1. **Ảnh (JPG, HEIC, ARW, CR2, CR3, NEF, RAF, DNG)**: Đọc `EXIF DateTimeOriginal` bằng `exifr`.
-  2. **Video (MP4, MOV, MXF, MKV)**: Đọc `creation_time` trong container metadata bằng `ffprobe` / `ffmpeg-static`.
-  3. **Fallback**: Dùng `fs.stat().mtime` (tuyệt đối không chỉ tin vào `birthtime` vì OS thường ghi đè `birthtime` khi copy).
-- **Quy tắc Quay xuyên đêm**: Khi bật `overnightMode`, các file có thời gian từ `00:00` đến `04:00` của ngày `D+1` vẫn được gom chung là hợp lệ với ngày quay `D`.
-- **Chế độ xử lý khi lệch ngày**:
-  - `FILTER_TARGET_ONLY`: Chỉ copy file khớp ngày mục tiêu sang Ổ 1.
-  - `SPLIT_BY_DATE`: Tạo các thư mục con `YYYY.MM.DD/` tương ứng trên Ổ 1.
-  - `COPY_ALL`: Chép toàn bộ theo cấu trúc gốc.
+### 2.1. Date Guard & ShotDate Cache
+- **Độ ưu tiên đọc ngày gốc**: `EXIF DateTimeOriginal` (`exifr`) ➔ Video container atom (`mvhd` / `ffmpeg-static`) ➔ `fs.stat().mtime`.
+- **Quét 2 bước**: Hiển thị danh sách file ngay lập tức (`scanRecursiveQuick`), đọc ngày chụp ngầm từng đợt và lưu cache vào `userData/shot-date-cache.json`.
+- **Quy tắc Quay xuyên đêm**: Khi bật `overnightMode`, file từ `00:00` đến `04:00` của ngày `D+1` được tính vào ngày quay `D`.
 
-### 2.2. Dual-Mode Source (Ingest trực tiếp & Watch Mode)
-- **Chế độ mặc định (Direct Ingest)**: App đọc danh sách file từ Thẻ nhớ ➔ ghi sang Ổ 1 qua stream kèm tính song song `XXHash64` trên luồng đọc để giảm số lần đọc đĩa.
-- **Chế độ dự phòng (Watch Mode)**: Cho phép người dùng tự copy bằng Windows Explorer / TeraCopy / macOS Finder. App theo dõi thư mục Ổ 1 bằng `chokidar` kết hợp 3 lớp xác nhận xong:
-  1. Không còn file tạm (`.tmp`, `.part`, `._*`).
-  2. Không còn file bị khóa ghi (File-Lock check).
-  3. Tổng dung lượng & `mtime` ổn định trong `N` giây (mặc định 30s).
+### 2.2. Copy, Verify & Watch Mode
+- **Lập kế hoạch (`copyPlan.ts`) & Thực thi (`copyVerifyService.ts`)**:
+  - Chặn tự chép đè thư mục cha/con (`assertNonOverlappingDirs`), kiểm tra dung lượng trống trước khi chép, xử lý xung đột tên (`keep-both` / `skip` / `overwrite`), ghi tạm `.fbpart` và đổi tên nguyên tử (atomic rename).
+  - Verify **XXHash64** từng file (dùng `xxhash-wasm` + `verify-ledger.json` để bỏ qua file chưa đổi). Hỗ trợ cả engine ngoài (TeraCopy, FastCopy, Robocopy, rsync, ditto) và tự verify XXHash64 sau khi engine ngoài xong.
+- **Watch Mode (`watchService.ts`)**: Theo dõi thư mục Ổ 1 qua `chokidar`, đếm cả file đã có sẵn, chỉ kích hoạt chuỗi sau khi đủ file và hết khóa ghi.
 
-### 2.3. Media Inspector & Thumbnail Generator
-- Quét danh sách file hợp lệ đã sao lưu, sắp xếp theo thời gian quay/chụp gốc tăng dần để lấy **First Shot** và **Last Shot**.
-- **Video**: Chạy `ffmpeg-static` trích xuất 1 frame nhanh (`-ss 00:00:01 -vframes 1 -vf scale=640:-1`) xuất ra file `.jpg` (~100–200KB).
-- **Ảnh (kể cả RAW)**: Dùng `exifr.thumbnail()` trích xuất trực tiếp ảnh JPEG Preview nhúng sẵn trong file RAW (tốc độ vài mili-giây, không cần decode RAW nặng).
+### 2.3. Media Info, Thumbnail & Packaging
+- **Helper dùng chung (`electron/lib/thumbnail.ts`)**: Trích xuất thumbnail JPEG (`exifr.thumbnail` cho ảnh/RAW, `ffmpeg-static` cho video), dùng chung cho cả Preview lưới (`mediaInfoService.ts`) và Shot đầu/cuối (`mediaInspectorService.ts`).
+- **Đóng gói (`packagingService.ts`)**: Hỗ trợ `video-raw-smart` (Video lẻ + Ảnh Zip Store `-mx=0`), `none`, `zip-store`, `7z`; hỗ trợ đóng gói chọn lọc (`selectedFilePaths`), luôn kiểm tra file nén bằng `7za t`, không bao giờ ghi file tạm lên thẻ nhớ/ổ rời.
 
-### 2.4. Packaging & Google Drive Resumable Upload
-- **Đóng gói (`7zip-bin`)**:
-  - Chế độ `NONE`: Giữ nguyên thư mục, up từng file.
-  - Chế độ `ZIP_STORE`: Nén mức `-mx=0` (Store — không nén CPU, tốc độ ngang copy ổ cứng), đặc biệt tối ưu cho thư mục chứa hàng nghìn file ảnh RAW/JPG.
-  - Chế độ `ARCHIVE_7Z`: Nén tiêu chuẩn.
-  - Tùy chọn xóa file tạm sau khi upload Drive thành công 100%.
-- **Google Drive API v3**:
-  - Tách `Folder ID` từ link dán vào (`https://drive.google.com/drive/folders/<ID>`).
-  - Gọi `files.get(fields: 'capabilities(canAddChildren)')` để kiểm tra ngay quyền **Editor** trước khi chạy.
-  - Sử dụng **Resumable Upload** theo từng chunk (ví dụ 16MB–32MB) có Exponential Backoff khi rớt mạng.
-  - Khi xong toàn bộ, upload thêm `_00_BACKUP_REPORT.txt` và 2 ảnh thumbnail (`_01_FIRST_SHOT_*.jpg`, `_02_LAST_SHOT_*.jpg`) ngay đầu thư mục Drive.
+### 2.4. Google Drive API v3 & Báo cáo PDF/TXT
+- **OAuth 2.0 + PKCE & Google Picker (`googleDrive/{auth,picker,storage}.ts`)**: Scope `drive.file`, hỗ trợ chọn trình duyệt, không cần người dùng tự cấu hình JSON nếu đã nhúng `build/google-oauth-client.json` (có `picker_api_key` + `project_number`).
+- **Resumable Upload (`googleDrive/{folders,upload}.ts`)**: Chunk **32 MB / 64 MB**, **3 luồng upload song song**, cache danh sách file thư mục đích (`listRemoteFilesInFolder`), đối chiếu `md5Checksum`, tự retry backoff khi gặp `403 rateLimit / 429 / 5xx`.
+- **Báo cáo (`reportService.ts`)**: Tạo sau khi upload xong, xuất `_00_BACKUP_REPORT.pdf` (qua Chromium `printToPDF`) + `_00_BACKUP_REPORT.txt` và 2 ảnh thumbnail đầu/cuối.
 
-### 2.5. Power Management & Build Đa nền tảng (Windows & macOS)
-- **Prevent Sleep**: `electron.powerSaveBlocker.start('prevent-app-suspension')` khi có job đang chạy.
-- **Post-Job Action**:
-  - **Windows**: Sleep (`rundll32.exe powrprof.dll,SetSuspendState 0,1,0`) / Shutdown (`shutdown /s /t 60`).
-  - **macOS**: Sleep (`pmset sleepnow` hoặc `osascript -e 'tell app "System Events" to sleep'`).
-- **Đóng gói Windows & macOS**: Sử dụng `electron-builder` kết hợp **GitHub Actions** (runner macOS & Windows) ở Phase 5 để tự động xuất đồng thời `.exe` và `.dmg`.
+### 2.5. Power Management & Build Đa nền tảng
+- **Prevent Sleep**: `powerSaveBlocker.start('prevent-app-suspension')`.
+- **Post-Job Action**: Windows Sleep (PowerShell `SetSuspendState`) / Shutdown (`shutdown.exe /s /t 5`); macOS Sleep (`pmset sleepnow` / `osascript`) / Shutdown (`osascript`).
+- **CI/CD**: GitHub Actions (`.github/workflows/build.yml`) chạy `typecheck`, `npm test`, nạp secret `GOOGLE_OAUTH_CLIENT_JSON` và đóng gói song song Windows (`.exe` x64) + macOS Apple Silicon (`.dmg` `arm64` trên `macos-15`).
 
 ---
 
-## 3. Tổ chức mã nguồn (refactor v1.1.0-dev, 25/11/2026)
+## 3. Sơ đồ Mã nguồn
 
-```text
-electron/
-  main.ts            Cửa sổ + single-instance, gọi registerIpcHandlers()
-  preload.ts         Bridge window.frameBackup, kiểu = FrameBackupBridge
-  shared/            ★ Hợp đồng IPC dùng chung main + renderer (chỉ type & hàm thuần)
-    types.ts         Mọi type IPC + FrameBackupBridge
-    ipcChannels.ts   Tên kênh IPC (IPC.*, IPC_EVENTS.*)
-    format.ts dates.ts paths.ts driveLink.ts constants.ts
-  ipc/               Đăng ký IPC theo nhóm: system, disk, pipeline (copy/watch/media/pack), drive
-  lib/               process (spawn có hủy), jobSlot (1 job có thể hủy), hash (XXHash64),
-                     tempFiles, exec, binaries (asar.unpacked), progress, errors, abort
-  services/          copyVerify, copyEngine, disk, metadata, mediaInspector, packaging,
-                     watch, eject, power, googleDrive/{storage,auth,folders,upload}
-src/
-  App.tsx            Điều phối state & chuỗi sao lưu
-  components/columns CardColumn, Drive1Column, Drive2Column, GoogleDriveColumn
-  components/layout  TopStatusBar, RibbonToolbar, ColumnParts, Splitters, tones
-  hooks/             useColumnLayout, useRowSelection, useDropZone, useActivityLog, useLatestRef
-  lib/               storage, cardAnalysis, uploadPlan, dragData, paths, time, demo
-  types/framebackup.ts  Re-export electron/shared (giữ đường import cũ)
-```
-
-**Quy tắc khi thêm tính năng:**
-- Thêm/đổi kiểu dữ liệu IPC: sửa `electron/shared/types.ts` (renderer tự nhận qua re-export).
-- Thêm kênh IPC: khai báo trong `electron/shared/ipcChannels.ts`, đăng ký trong `electron/ipc/<nhóm>Ipc.ts`, thêm vào `FrameBackupBridge` và `preload.ts`.
-- Job dài có nút Dừng: dùng `createJobSlot()` + `runAbortableProcess()` / `CANCELLED`.
-- `preload.ts` require được `./shared/ipcChannels` vì BrowserWindow đang chạy `sandbox: false`.
+Xem chi tiết cây thư mục và quy tắc IPC tại [`CLAUDE.md`](./CLAUDE.md).

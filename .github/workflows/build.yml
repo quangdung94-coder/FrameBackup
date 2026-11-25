@@ -22,10 +22,10 @@ jobs:
             build_cmd: npm run dist:win
             artifact_name: FrameBackup-Windows
             artifact_path: release/*.exe
-          - os_label: macOS (.dmg)
-            runner: macos-15-intel
+          - os_label: macOS Apple Silicon (.dmg)
+            runner: macos-15
             build_cmd: npm run dist:mac
-            artifact_name: FrameBackup-macOS
+            artifact_name: FrameBackup-macOS-arm64
             artifact_path: release/*.dmg
 
     steps:
@@ -43,6 +43,22 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Write Google OAuth Client Config
+        shell: bash
+        env:
+          GOOGLE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_OAUTH_CLIENT_JSON }}
+        run: |
+          if [ -n "$GOOGLE_OAUTH_CLIENT_JSON" ]; then
+            mkdir -p build
+            printf '%s' "$GOOGLE_OAUTH_CLIENT_JSON" > build/google-oauth-client.json
+            echo "Wrote build/google-oauth-client.json from GitHub secret."
+          else
+            echo "::warning::GOOGLE_OAUTH_CLIENT_JSON secret is empty."
+          fi
 
       - name: Build & Package Installer
         run: ${{ matrix.build_cmd }}

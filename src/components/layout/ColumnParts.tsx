@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ArrowRight, ArrowUp, FolderOpen, Maximize2, Minimize2, type LucideIcon } from 'lucide-react';
+import { ArrowRight, Maximize2, Minimize2, type LucideIcon } from 'lucide-react';
 import { TONE_BADGE, TONE_BAR, type ColumnTone } from './tones';
 
 /** Nút phóng to / thu đều cột. */
@@ -78,64 +78,9 @@ export function DriveUsageRow({
   );
 }
 
-/** Thanh điều hướng đường dẫn (nút lên thư mục cha + ô đường dẫn + nút chọn thư mục). */
+/** Thanh điều hướng đường dẫn. */
 export function NavBar({ children }: { children: ReactNode }) {
   return <div className="p-1.5 bg-[#1b1b20] border-b border-[#2b2b34] flex items-center gap-1">{children}</div>;
-}
-
-export function UpButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="px-1.5 py-1 rounded bg-[#23232a] hover:bg-[#32323c] border border-[#3e3e4b] text-zinc-300 shrink-0"
-      title="Lên thư mục cha"
-    >
-      <ArrowUp className="w-3.5 h-3.5" />
-    </button>
-  );
-}
-
-export function PickFolderButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="px-2 py-1 rounded bg-[#23232a] hover:bg-[#32323c] border border-[#3e3e4b] text-[11px] text-zinc-200 shrink-0"
-    >
-      <FolderOpen className="w-3.5 h-3.5" />
-    </button>
-  );
-}
-
-interface PathInputBarProps {
-  path: string;
-  parentPath: string | null;
-  placeholder: string;
-  onPathChange: (value: string) => void;
-  /** Đọc lại thư mục (blur / Enter). */
-  onCommit: () => void;
-  onGoUp: (parent: string) => void;
-  onPickFolder: () => void;
-}
-
-/** Ô nhập đường dẫn Ổ 1 / Ổ 2. */
-export function PathInputBar({ path, parentPath, placeholder, onPathChange, onCommit, onGoUp, onPickFolder }: PathInputBarProps) {
-  return (
-    <NavBar>
-      {parentPath && <UpButton onClick={() => onGoUp(parentPath)} />}
-      <input
-        type="text"
-        value={path}
-        onChange={(e) => onPathChange(e.target.value)}
-        onBlur={onCommit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') onCommit();
-        }}
-        placeholder={placeholder}
-        className="flex-1 min-w-0 bg-[#101013] border border-[#2b2b34] rounded px-2 py-1 text-[11px] text-zinc-100 outline-none"
-      />
-      <PickFolderButton onClick={onPickFolder} />
-    </NavBar>
-  );
 }
 
 /** Dải thông tin nhỏ dưới thanh đường dẫn. */
@@ -173,13 +118,22 @@ export function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; titl
   );
 }
 
-const DROP_OVERLAY: Record<'blue' | 'emerald', { bg: string; icon: string; sub: string }> = {
+const DROP_OVERLAY: Record<'blue' | 'emerald' | 'purple', { bg: string; icon: string; sub: string }> = {
   blue: { bg: 'bg-blue-950/80', icon: 'text-blue-300', sub: 'text-blue-200' },
   emerald: { bg: 'bg-emerald-950/80', icon: 'text-emerald-300', sub: 'text-emerald-200' },
+  purple: { bg: 'bg-purple-950/80', icon: 'text-purple-300', sub: 'text-purple-200' },
 };
 
 /** Lớp phủ khi đang kéo file vào cột. */
-export function DropOverlay({ tone, title }: { tone: 'blue' | 'emerald'; title: string }) {
+export function DropOverlay({
+  tone,
+  title,
+  subtitle = 'Tự động Verify XXHash64',
+}: {
+  tone: 'blue' | 'emerald' | 'purple';
+  title: string;
+  subtitle?: string;
+}) {
   const c = DROP_OVERLAY[tone];
   return (
     <div
@@ -187,7 +141,7 @@ export function DropOverlay({ tone, title }: { tone: 'blue' | 'emerald'; title: 
     >
       <ArrowRight className={`w-10 h-10 ${c.icon} mb-2 animate-bounce`} />
       <div className="text-sm font-bold text-white">{title}</div>
-      <div className={`text-xs ${c.sub} mt-1`}>Tự động Verify XXHash64</div>
+      <div className={`text-xs ${c.sub} mt-1`}>{subtitle}</div>
     </div>
   );
 }

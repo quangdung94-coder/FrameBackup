@@ -1,4 +1,4 @@
-import { dialog, ipcMain, shell } from 'electron';
+import { app, dialog, ipcMain, shell } from 'electron';
 import os from 'node:os';
 import { executePowerAction } from '../services/powerService';
 import { IPC } from '../shared/ipcChannels';
@@ -12,6 +12,7 @@ export function registerSystemIpc(ctx: IpcContext) {
     arch: process.arch,
     hostname: os.hostname(),
     preventSleepActive: isPreventSleepActive(),
+    appVersion: app.getVersion(),
   }));
 
   ipcMain.handle(IPC.system.setPreventSleep, (_event, enabled: boolean) => setPreventSleep(enabled));

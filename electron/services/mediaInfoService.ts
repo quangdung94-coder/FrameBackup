@@ -2,9 +2,8 @@ import { createHash } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import exifr from 'exifr';
-import ffmpegPathRaw from 'ffmpeg-static';
-import { resolveUnpackedBinary } from '../lib/binaries';
 import { execFileAsync } from '../lib/exec';
+import { extractImageThumb, extractVideoThumb, ffmpegPath } from '../lib/thumbnail';
 import type { MediaInfo, MediaThumbRequest } from '../shared/types';
 
 /**
@@ -12,7 +11,6 @@ import type { MediaInfo, MediaThumbRequest } from '../shared/types';
  * và hình thu nhỏ / dải hình tua nhanh. Đọc lười theo file đang hiện trên màn hình, có cache.
  */
 
-const ffmpegPath = resolveUnpackedBinary(ffmpegPathRaw);
 const VIDEO_EXT = new Set(['mp4', 'mov', 'm4v', 'mts', 'm2ts', 'mxf', 'avi', 'mkv', 'insv', 'lrv', '3gp', 'wmv', 'webm', 'braw', 'r3d', 'crm']);
 const QT_EXT = new Set(['mp4', 'mov', 'm4v', 'insv', 'lrv', '3gp']);
 const IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'tif', 'tiff', 'webp', 'arw', 'cr2', 'cr3', 'nef', 'raf', 'rw2', 'orf', 'dng', 'srw', 'pef']);
@@ -287,16 +285,6 @@ async function readAsDataUrl(p: string): Promise<string | null> {
   }
 }
 
-async function runFfmpeg(args: string[], timeout = 30000): Promise<boolean> {
-  if (!ffmpegPath) return false;
-  try {
-    await ffmpegSlot(() => execFileAsync(ffmpegPath!, ['-hide_banner', '-loglevel', 'error', ...args], { windowsHide: true, timeout }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 const inflight = new Map<string, Promise<string | null>>();
 function once(key: string, fn: () => Promise<string | null>): Promise<string | null> {
   const cur = inflight.get(key);
@@ -319,21 +307,11 @@ export function getMediaThumbnail(req: MediaThumbRequest): Promise<string | null
     const ext = extOf(filePath);
     let ok = false;
     if (IMAGE_EXT.has(ext)) {
-      try {
-        const buf = await exifr.thumbnail(filePath);
-        if (buf && buf.length > 0) {
-          await fsp.writeFile(out, Buffer.from(buf));
-          ok = true;
-        }
-      } catch {
-        // ffmpeg bên dưới
-      }
-      if (!ok) ok = await runFfmpeg(['-i', filePath, '-vframes', '1', '-vf', `scale=${THUMB_W}:-2`, '-q:v', '4', '-y', out]);
+      ok = await extractImageThumb(filePath, out, { width: THUMB_W, quality: 4, timeoutMs: 30000, runFfmpeg: ffmpegSlot });
     } else if (VIDEO_EXT.has(ext)) {
       const info = await probeOne(filePath);
-      const seek = info.durationSec && info.durationSec > 3 ? Math.min(1, info.durationSec / 10) : 0;
-      ok = await runFfmpeg(['-ss', seek.toFixed(2), '-i', filePath, '-vframes', '1', '-vf', `scale=${THUMB_W}:-2`, '-q:v', '4', '-an', '-y', out]);
-      if (!ok && seek > 0) ok = await runFfmpeg(['-i', filePath, '-vframes', '1', '-vf', `scale=${THUMB_W}:-2`, '-q:v', '4', '-an', '-y', out]);
+      const seekSec = info.durationSec && info.durationSec > 3 ? Math.min(1, info.durationSec / 10) : 0;
+      ok = await extractVideoThumb(filePath, out, { width: THUMB_W, quality: 4, seekSec, timeoutMs: 30000, runFfmpeg: ffmpegSlot });
     }
     return ok ? readAsDataUrl(out) : null;
   });

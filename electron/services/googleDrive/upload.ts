@@ -12,12 +12,35 @@ import { driveFolderWebLink } from '../../shared/driveLink';
 import { calcPercent, calcSpeedMBs } from '../../shared/format';
 import type { DriveUploadItem, DriveUploadProgressEvent, DriveUploadRequest, DriveUploadSummary } from '../../shared/types';
 import { getAuthorizedOAuthClient } from './auth';
-import { ensureRemoteSubfolder, findExistingRemoteFile } from './folders';
+import { ensureRemoteSubfolder, listRemoteFilesInFolder, type RemoteFileMeta } from './folders';
 
-const CHUNK_SIZE = 16 * 1024 * 1024; // 16 MB (must be multiple of 256 KB for Google Resumable Upload)
+// Google Resumable Upload requires chunk size to be a multiple of 256 KB.
+// 32 MB for normal files and 64 MB for large videos (>= 256 MB) reduces HTTP 308 round-trips on fast fiber.
+const CHUNK_SIZE_DEFAULT = 32 * 1024 * 1024;
+const CHUNK_SIZE_LARGE = 64 * 1024 * 1024;
+const LARGE_FILE_THRESHOLD = 256 * 1024 * 1024;
+const MAX_CONCURRENT_UPLOADS = 3;
 const MAX_CHUNK_RETRIES = 6;
+const MAX_INIT_RETRIES = 5;
 
 const uploadJob = createJobPool();
+
+function pickChunkSize(totalSize: number): number {
+  return totalSize >= LARGE_FILE_THRESHOLD ? CHUNK_SIZE_LARGE : CHUNK_SIZE_DEFAULT;
+}
+
+function isRetryableDriveStatus(status: number, bodyText = ''): boolean {
+  if ([408, 429, 500, 502, 503, 504].includes(status)) return true;
+  if (status === 403 && /rateLimitExceeded|userRateLimitExceeded|sharingRateLimitExceeded/i.test(bodyText)) {
+    return true;
+  }
+  return false;
+}
+
+function backoffMs(attempt: number, baseMs = 1500): number {
+  const jitter = Math.floor(Math.random() * 400);
+  return Math.min(30_000, baseMs * Math.pow(2, attempt - 1) + jitter);
+}
 
 function guessMimeType(fileName: string): string {
   const ext = path.extname(fileName).toLowerCase();
@@ -60,64 +83,88 @@ async function uploadSingleFileResumable(
   localPath: string,
   remoteName: string,
   parentFolderId: string,
+  existingRemote: RemoteFileMeta | null,
   signal: AbortSignal,
   onDeltaBytes: (delta: number) => void
-): Promise<{ id: string; deduped: boolean }> {
+): Promise<{ id: string; deduped: boolean; md5: string | null }> {
   const stat = await fsp.stat(localPath);
   const totalSize = stat.size;
   const mimeType = guessMimeType(remoteName);
+  const chunkSize = pickChunkSize(totalSize);
 
   // Cloud Smart Deduplication: avoid creating duplicate files on Google Drive when re-running a job
   const isReportOrThumb =
     remoteName.startsWith('_00_BACKUP_REPORT') ||
     remoteName.startsWith('_01_FIRST_SHOT_') ||
     remoteName.startsWith('_02_LAST_SHOT_');
-  const existingRemote = await findExistingRemoteFile(auth, parentFolderId, remoteName);
 
   // Chỉ bỏ qua khi trên Drive đã có file cùng tên, cùng dung lượng VÀ cùng MD5 (trước đây chỉ so dung lượng)
   if (existingRemote && !isReportOrThumb && existingRemote.sizeBytes === totalSize && existingRemote.md5) {
     const localMd5 = await hashFileMd5(localPath, signal);
     if (localMd5 === existingRemote.md5) {
       onDeltaBytes(totalSize);
-      return { id: existingRemote.id, deduped: true };
+      return { id: existingRemote.id, deduped: true, md5: existingRemote.md5 };
     }
   }
 
   const createSessionUrl = async (): Promise<string> => {
-    const tokenRes = await auth.getAccessToken();
-    const accessToken = tokenRes.token;
-    if (!accessToken) throw new Error('Không lấy được Google Access Token.');
+    let attempt = 0;
+    while (true) {
+      if (signal.aborted) throw cancelledError();
+      try {
+        const tokenRes = await auth.getAccessToken();
+        const accessToken = tokenRes.token;
+        if (!accessToken) throw new Error('Không lấy được Google Access Token.');
 
-    const endpoint =
-      existingRemote && isReportOrThumb
-        ? `https://www.googleapis.com/upload/drive/v3/files/${existingRemote.id}?uploadType=resumable&supportsAllDrives=true&fields=id,md5Checksum`
-        : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,md5Checksum';
-    const method = existingRemote && isReportOrThumb ? 'PATCH' : 'POST';
-    const metadataBody =
-      method === 'PATCH'
-        ? JSON.stringify({ name: remoteName })
-        : JSON.stringify({ name: remoteName, parents: [parentFolderId] });
+        const endpoint =
+          existingRemote && isReportOrThumb
+            ? `https://www.googleapis.com/upload/drive/v3/files/${existingRemote.id}?uploadType=resumable&supportsAllDrives=true&fields=id,md5Checksum`
+            : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,md5Checksum';
+        const method = existingRemote && isReportOrThumb ? 'PATCH' : 'POST';
+        const metadataBody =
+          method === 'PATCH'
+            ? JSON.stringify({ name: remoteName })
+            : JSON.stringify({ name: remoteName, parents: [parentFolderId] });
 
-    const initRes = await fetch(endpoint, {
-      method,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json; charset=UTF-8',
-        'X-Upload-Content-Type': mimeType,
-        'X-Upload-Content-Length': String(totalSize),
-      },
-      body: metadataBody,
-      signal,
-    });
+        const initRes = await fetch(endpoint, {
+          method,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json; charset=UTF-8',
+            'X-Upload-Content-Type': mimeType,
+            'X-Upload-Content-Length': String(totalSize),
+          },
+          body: metadataBody,
+          signal,
+        });
 
-    if (!initRes.ok) {
-      const errText = await initRes.text().catch(() => '');
-      throw new Error(`Không tạo được phiên Resumable Upload (HTTP ${initRes.status}): ${errText.slice(0, 200)}`);
+        if (!initRes.ok) {
+          const errText = await initRes.text().catch(() => '');
+          if (isRetryableDriveStatus(initRes.status, errText) && attempt < MAX_INIT_RETRIES) {
+            attempt += 1;
+            await sleep(backoffMs(attempt, 1200), signal);
+            continue;
+          }
+          throw new Error(`Không tạo được phiên Resumable Upload (HTTP ${initRes.status}): ${errText.slice(0, 200)}`);
+        }
+
+        const loc = initRes.headers.get('location');
+        if (!loc) throw new Error('Google Drive không trả về Resumable Upload URL.');
+        return loc;
+      } catch (err) {
+        if (signal.aborted || (err instanceof Error && err.message === CANCELLED)) {
+          throw cancelledError();
+        }
+        // Retry transient network errors when initializing session
+        const isHttpErr = err instanceof Error && err.message.startsWith('Không tạo được phiên');
+        if (!isHttpErr && attempt < MAX_INIT_RETRIES) {
+          attempt += 1;
+          await sleep(backoffMs(attempt, 1500), signal);
+          continue;
+        }
+        throw err;
+      }
     }
-
-    const loc = initRes.headers.get('location');
-    if (!loc) throw new Error('Google Drive không trả về Resumable Upload URL.');
-    return loc;
   };
 
   // MD5 tính dần theo từng chunk đọc lên (không phải đọc file 2 lần). Nếu bị nhảy offset thì tính lại cả file.
@@ -145,7 +192,7 @@ async function uploadSingleFileResumable(
         throw new Error(`Lỗi toàn vẹn khi upload (MD5 trên Drive không khớp): ${remoteName}`);
       }
     }
-    return { id: data.id, deduped: false };
+    return { id: data.id, deduped: false, md5: data.md5Checksum ?? null };
   };
 
   let uploadUrl = await createSessionUrl();
@@ -163,16 +210,16 @@ async function uploadSingleFileResumable(
     return verifyRemote(data);
   }
 
-  // 2. Stream file in 16MB chunks with auto-retry & resume
+  // 2. Stream file in 32MB/64MB chunks with auto-retry & resume
   const handle = await fsp.open(localPath, 'r');
   try {
     let offset = 0;
-    const chunkBuf = Buffer.allocUnsafe(Math.min(CHUNK_SIZE, totalSize));
+    const chunkBuf = Buffer.allocUnsafe(Math.min(chunkSize, totalSize));
 
     while (offset < totalSize) {
       if (signal.aborted) throw cancelledError();
 
-      const length = Math.min(CHUNK_SIZE, totalSize - offset);
+      const length = Math.min(chunkSize, totalSize - offset);
       const { bytesRead } = await handle.read(chunkBuf, 0, length, offset);
       if (bytesRead <= 0) break;
 
@@ -229,9 +276,10 @@ async function uploadSingleFileResumable(
             break;
           }
 
-          if ([408, 429, 500, 502, 503, 504].includes(putRes.status) && attempt < MAX_CHUNK_RETRIES) {
+          const errTxt = await putRes.text().catch(() => '');
+          if (isRetryableDriveStatus(putRes.status, errTxt) && attempt < MAX_CHUNK_RETRIES) {
             attempt += 1;
-            await sleep(Math.min(30_000, 1500 * Math.pow(2, attempt - 1)), signal);
+            await sleep(backoffMs(attempt, 1500), signal);
             const serverOffset = await queryResumableOffset(uploadUrl, totalSize, signal);
             if (serverOffset > offset) {
               onDeltaBytes(serverOffset - offset);
@@ -242,7 +290,6 @@ async function uploadSingleFileResumable(
             continue;
           }
 
-          const errTxt = await putRes.text().catch(() => '');
           throw new Error(`Upload lỗi HTTP ${putRes.status}: ${errTxt.slice(0, 180)}`);
         } catch (err) {
           if (signal.aborted || (err instanceof Error && err.message === CANCELLED)) {
@@ -250,7 +297,7 @@ async function uploadSingleFileResumable(
           }
           if (attempt < MAX_CHUNK_RETRIES) {
             attempt += 1;
-            await sleep(Math.min(30_000, 2000 * Math.pow(2, attempt - 1)), signal);
+            await sleep(backoffMs(attempt, 2000), signal);
             try {
               const serverOffset = await queryResumableOffset(uploadUrl, totalSize, signal);
               if (serverOffset > offset) {
@@ -303,9 +350,22 @@ export async function uploadProjectToDrive(
     });
 
     const folderCache = new Map<string, string>();
+    const folderPromiseCache = new Map<string, Promise<string>>();
+    const ensureSubfolderSafe = (parentId: string, seg: string): Promise<string> => {
+      const key = `${parentId}/${seg}`;
+      const existing = folderPromiseCache.get(key);
+      if (existing) return existing;
+      const p = ensureRemoteSubfolder(auth, parentId, seg, folderCache).catch((err) => {
+        folderPromiseCache.delete(key);
+        throw err;
+      });
+      folderPromiseCache.set(key, p);
+      return p;
+    };
+
     let targetFolderId = req.parentFolderId;
     if (req.createProjectSubfolder) {
-      targetFolderId = await ensureRemoteSubfolder(auth, req.parentFolderId, req.createProjectSubfolder, folderCache);
+      targetFolderId = await ensureSubfolderSafe(req.parentFolderId, req.createProjectSubfolder);
     }
 
     // Calculate total upload size
@@ -328,54 +388,119 @@ export async function uploadProjectToDrive(
         `Không tìm thấy ${missingItems.length} file nguồn để upload: ${preview}${missingItems.length > 5 ? '...' : ''}`
       );
     }
-    let dedupedFiles = 0;
 
+    // Cache danh sách file trên từng thư mục Drive đích (1 request/thư mục thay vì 1 request/file)
+    const remoteFilesCache = new Map<string, Promise<Map<string, RemoteFileMeta>>>();
+    const getRemoteFilesInFolder = (folderId: string): Promise<Map<string, RemoteFileMeta>> => {
+      const existing = remoteFilesCache.get(folderId);
+      if (existing) return existing;
+      const p = listRemoteFilesInFolder(auth, folderId).catch((err) => {
+        remoteFilesCache.delete(folderId);
+        throw err;
+      });
+      remoteFilesCache.set(folderId, p);
+      return p;
+    };
+
+    let dedupedFiles = 0;
     let bytesUploaded = 0;
     let filesUploaded = 0;
     const startedAt = Date.now();
     const shouldEmit = createThrottle(150);
+    const activeFiles = new Set<string>();
 
-    for (const item of validItems) {
-      if (signal.aborted) throw cancelledError();
+    const formatCurrentFile = (fallback: string): string => {
+      if (activeFiles.size === 0) return fallback;
+      const first = activeFiles.values().next().value as string;
+      return activeFiles.size > 1 ? `${first} (+${activeFiles.size - 1} file khác)` : first;
+    };
 
-      let destParentId = targetFolderId;
-      if (item.relativeSubdir) {
-        const parts = item.relativeSubdir.split(/[\\/]+/).filter(Boolean);
-        for (const seg of parts) {
-          destParentId = await ensureRemoteSubfolder(auth, destParentId, seg, folderCache);
-        }
-      }
-
+    const emitProgress = (fallbackName: string, force = false) => {
+      const now = Date.now();
+      if (!force && !shouldEmit(now)) return;
       onProgress({
         status: 'uploading',
-        currentFile: item.remoteName,
+        currentFile: formatCurrentFile(fallbackName),
         filesUploaded,
         totalFiles: validItems.length,
         bytesUploaded,
         totalBytes,
         percent: calcPercent(bytesUploaded, totalBytes),
-        speedMBs: calcSpeedMBs(bytesUploaded, startedAt),
+        speedMBs: calcSpeedMBs(bytesUploaded, startedAt, now),
       });
+    };
 
-      const uploaded = await uploadSingleFileResumable(auth, item.localPath, item.remoteName, destParentId, signal, (delta) => {
-        bytesUploaded += delta;
-        const now = Date.now();
-        if (shouldEmit(now)) {
-          onProgress({
-            status: 'uploading',
-            currentFile: item.remoteName,
-            filesUploaded,
-            totalFiles: validItems.length,
-            bytesUploaded,
-            totalBytes,
-            percent: calcPercent(bytesUploaded, totalBytes),
-            speedMBs: calcSpeedMBs(bytesUploaded, startedAt, now),
-          });
+    // Chạy song song tối đa 3 file cùng lúc; nếu 1 luồng lỗi thì hủy các luồng còn lại
+    const poolAbort = new AbortController();
+    const onExternalAbort = () => poolAbort.abort();
+    if (signal.aborted) poolAbort.abort();
+    else signal.addEventListener('abort', onExternalAbort, { once: true });
+
+    let nextIndex = 0;
+    let firstError: unknown = null;
+    const workerCount = Math.min(MAX_CONCURRENT_UPLOADS, validItems.length);
+
+    const runWorker = async () => {
+      while (true) {
+        if (poolAbort.signal.aborted) return;
+        const idx = nextIndex++;
+        if (idx >= validItems.length) return;
+        const item = validItems[idx];
+
+        let destParentId = targetFolderId;
+        if (item.relativeSubdir) {
+          const parts = item.relativeSubdir.split(/[\\/]+/).filter(Boolean);
+          for (const seg of parts) {
+            if (poolAbort.signal.aborted) throw cancelledError();
+            destParentId = await ensureSubfolderSafe(destParentId, seg);
+          }
         }
-      });
 
-      if (uploaded.deduped) dedupedFiles += 1;
-      filesUploaded += 1;
+        const remoteMap = await getRemoteFilesInFolder(destParentId);
+        const existingRemote = remoteMap.get(item.remoteName) ?? null;
+
+        activeFiles.add(item.remoteName);
+        emitProgress(item.remoteName, true);
+
+        try {
+          const uploaded = await uploadSingleFileResumable(
+            auth,
+            item.localPath,
+            item.remoteName,
+            destParentId,
+            existingRemote,
+            poolAbort.signal,
+            (delta) => {
+              bytesUploaded += delta;
+              emitProgress(item.remoteName, false);
+            }
+          );
+
+          if (uploaded.deduped) dedupedFiles += 1;
+          else if (!existingRemote) {
+            remoteMap.set(item.remoteName, { id: uploaded.id, sizeBytes: -1, md5: uploaded.md5 });
+          }
+          filesUploaded += 1;
+        } finally {
+          activeFiles.delete(item.remoteName);
+        }
+        emitProgress(item.remoteName, true);
+      }
+    };
+
+    try {
+      await Promise.all(
+        Array.from({ length: workerCount }, () =>
+          runWorker().catch((err) => {
+            if (!firstError) firstError = err;
+            poolAbort.abort();
+          })
+        )
+      );
+      if (firstError) throw firstError;
+      if (signal.aborted) throw cancelledError();
+    } finally {
+      signal.removeEventListener('abort', onExternalAbort);
     }
 
     // Optional cleanup of temporary zip/7z staging archives & empty staging folder after 100% upload success

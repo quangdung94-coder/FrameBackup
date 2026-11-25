@@ -9,9 +9,6 @@ export function escapeDriveQueryLiteral(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-/** @deprecated giữ tên cũ — dùng parseGoogleDriveFolderId trong shared/driveLink. */
-export const parseDriveFolderId = parseGoogleDriveFolderId;
-
 export async function checkDriveFolderAccess(folderUrlOrId: string): Promise<DriveFolderCheckResult> {
   const folderId = parseGoogleDriveFolderId(folderUrlOrId);
   if (!folderId) {
@@ -147,22 +144,43 @@ export async function ensureRemoteSubfolder(
   return newId;
 }
 
-export async function findExistingRemoteFile(
+export interface RemoteFileMeta {
+  id: string;
+  sizeBytes: number;
+  md5: string | null;
+}
+
+/** Liệt kê toàn bộ file (không tính thư mục) trong 1 thư mục Drive để đối chiếu trùng hàng loạt (1–2 API call thay vì gọi cho từng file). */
+export async function listRemoteFilesInFolder(
   auth: Auth.OAuth2Client,
-  parentId: string,
-  remoteName: string
-): Promise<{ id: string; sizeBytes: number; md5: string | null } | null> {
+  parentId: string
+): Promise<Map<string, RemoteFileMeta>> {
   const drive = google.drive({ version: 'v3', auth });
-  const res = await drive.files.list({
-    q: `'${escapeDriveQueryLiteral(parentId)}' in parents and name = '${escapeDriveQueryLiteral(
-      remoteName
-    )}' and mimeType != '${FOLDER_MIME}' and trashed = false`,
-    fields: 'files(id,size,md5Checksum)',
-    pageSize: 1,
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
-  });
-  const first = res.data.files?.[0];
-  if (!first?.id) return null;
-  return { id: first.id, sizeBytes: first.size ? Number(first.size) : -1, md5: first.md5Checksum ?? null };
+  const map = new Map<string, RemoteFileMeta>();
+  const q = `'${escapeDriveQueryLiteral(parentId)}' in parents and mimeType != '${FOLDER_MIME}' and trashed = false`;
+  let pageToken: string | undefined;
+
+  do {
+    const res = await drive.files.list({
+      q,
+      fields: 'nextPageToken,files(id,name,size,md5Checksum)',
+      pageSize: 1000,
+      pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    for (const f of res.data.files || []) {
+      if (!f.id || !f.name) continue;
+      if (!map.has(f.name)) {
+        map.set(f.name, {
+          id: f.id,
+          sizeBytes: f.size ? Number(f.size) : -1,
+          md5: f.md5Checksum ?? null,
+        });
+      }
+    }
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  return map;
 }
