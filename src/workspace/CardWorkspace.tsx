@@ -1,4 +1,4 @@
-import { AlertTriangle, CloudUpload, Eye, Play, Zap } from 'lucide-react';
+import { AlertTriangle, Check, Clock, CloudUpload, Eye, Play, Zap } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NameDialog, PropertiesDialog, type NamePrompt } from '../components/files/FileDialogs';
 import { CardColumn, type CardMode } from '../components/columns/CardColumn';
@@ -112,6 +112,13 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
   const [isRunning, setIsRunning] = useState(false);
   const [waitingSlot, setWaitingSlot] = useState(false);
   const [watching, setWatching] = useState(false);
+  const [copyingCardToD1, setCopyingCardToD1] = useState(false);
+  const [autoUploadAfterD1, setAutoUploadAfterD1] = useState(false);
+  const autoUploadAfterD1Ref = useRef(false);
+  const setAutoUploadQueued = useCallback((v: boolean) => {
+    autoUploadAfterD1Ref.current = v;
+    setAutoUploadAfterD1(v);
+  }, []);
   const [mediaReport, setMediaReport] = useState<MediaReportResult | null>(null);
   const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
@@ -845,6 +852,10 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     progress.set({ step1: null });
     const end = await beginRun();
     if (!end) return;
+    let shouldChainUpload = false;
+    let res1Summary: CopyVerifySummary | null = null;
+    setCopyingCardToD1(true);
+    setAutoUploadQueued(false);
     try {
       await keepAwake();
       const res1 = await api.startCopyVerify(req1);
@@ -853,12 +864,53 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
         await handleCopyAftermath(res1);
         await refreshDrive1View();
         await shared.reloadSystem();
-        showToast(`✅ Đã copy & Verify ${res1.verifiedFiles} file sang Ổ 1 (${d1Dir})!`);
+        if (autoUploadAfterD1Ref.current) {
+          shouldChainUpload = true;
+          res1Summary = res1;
+          showToast(`✅ Xong Ổ 1 (${res1.verifiedFiles} file) — đang tự động Up thẳng lên Google Drive (bỏ qua Ổ 2)...`);
+        } else {
+          showToast(`✅ Đã copy & Verify ${res1.verifiedFiles} file sang Ổ 1 (${d1Dir})!`);
+        }
       } else if (res1.error !== CANCELLED) {
         showToast(`❌ Lỗi copy sang Ổ 1: ${res1.error}`);
       }
     } finally {
+      setCopyingCardToD1(false);
+      setAutoUploadQueued(false);
       end();
+    }
+    if (shouldChainUpload && res1Summary) {
+      const sh = latest.current.shared;
+      if (!sh.driveAuth.signedIn || !parseGoogleDriveFolderId(sh.driveLink)) {
+        showToast('⚠️ Chưa đăng nhập Google Drive hoặc thiếu link thư mục ở Cột 4 — đã bỏ qua tự động Up Drive.');
+        return;
+      }
+      const packMode = resolveEffectivePackMode(sh.uploadPack, sh.packMode);
+      await runAfterDrive1(d1Dir, {
+        skipStep2: true,
+        packMode,
+        card: cardRecordFrom(res1Summary),
+        skippedOldFiles: dateFilterMode === 'target-only' ? res1Summary.skippedFiles : 0,
+        keptMismatchFiles: dateFilterMode === 'all' ? countMismatchFiles(dateGroups) : 0,
+        notes: [
+          ...(pathsToUse.length > 0 ? [`Chỉ chép ${pathsToUse.length} mục đang chọn trên thẻ.`] : []),
+          `Tự động Up thẳng Google Drive sau khi chép xong Thẻ ➔ Ổ 1 (${packMode === 'none' ? 'không nén' : 'có nén'}), bỏ qua Ổ 2.`,
+        ],
+      });
+    }
+  };
+
+  const handleToggleAutoUploadAfterD1 = () => {
+    if (!autoUploadAfterD1Ref.current) {
+      if (!shared.driveAuth.signedIn || !parseGoogleDriveFolderId(shared.driveLink)) {
+        showToast('Hãy đăng nhập Google Drive và dán link thư mục ở Cột 4 trước khi bật tự Up Drive.');
+        return;
+      }
+      setAutoUploadQueued(true);
+      showToast('⏳ Đã hẹn: chép xong Ổ 1 sẽ tự động Up thẳng lên Google Drive (bỏ qua Ổ 2).');
+    } else {
+      setAutoUploadQueued(false);
+      showToast('Đã hủy hẹn tự động Up Drive sau khi chép xong Ổ 1.');
     }
   };
 
@@ -1026,6 +1078,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
   const handleCancel = async () => {
     const api = window.frameBackup;
     if (!api) return;
+    setAutoUploadQueued(false);
     await api.cancelCopy(jobId);
     await api.cancelPackaging(jobId);
     await api.cancelDriveUpload(jobId);
@@ -1187,15 +1240,41 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
           ))}
         </div>
 
-        {/* 2. Chỉ Upload từ Ổ 1 lên Drive (bỏ qua Thẻ & Ổ 2) */}
-        <button
-          disabled={busy}
-          onClick={() => void handleUploadOnly()}
-          className="h-10 inline-flex items-center gap-2 px-4 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 border border-purple-400/60 text-white font-bold text-sm shadow-lg shadow-purple-950/40 transition"
-          title="Chỉ upload thẳng từ thư mục đang mở ở Ổ 1 lên Google Drive (KHÔNG chép Thẻ, KHÔNG qua Ổ 2). Có tạo Báo cáo PDF + 2 Thumbnail."
-        >
-          <CloudUpload className="w-4 h-4" /> Ổ 1 ➔ Drive
-        </button>
+        {/* 2. Chỉ Upload từ Ổ 1 lên Drive (bỏ qua Thẻ & Ổ 2) — hoặc hẹn tự Up khi đang chép Thẻ ➔ Ổ 1 */}
+        {copyingCardToD1 ? (
+          <button
+            onClick={handleToggleAutoUploadAfterD1}
+            className={`h-10 inline-flex items-center gap-2 px-4 rounded-lg border font-bold text-sm shadow-lg transition ${
+              autoUploadAfterD1
+                ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/70 text-white shadow-emerald-950/50'
+                : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400/70 text-amber-200 shadow-amber-950/30'
+            }`}
+            title={
+              autoUploadAfterD1
+                ? 'Đang hẹn: chép xong Ổ 1 sẽ tự động Up thẳng lên Google Drive (bỏ qua Ổ 2). Bấm lại để hủy hẹn.'
+                : 'Bấm để hẹn: chép xong Ổ 1 sẽ tự động đóng gói & Up thẳng lên Google Drive (bỏ qua Ổ 2).'
+            }
+          >
+            {autoUploadAfterD1 ? (
+              <>
+                <Check className="w-4 h-4" /> Chờ xong Ổ 1 ➔ Up Drive
+              </>
+            ) : (
+              <>
+                <Clock className="w-4 h-4" /> Xong Ổ 1 tự Up Drive
+              </>
+            )}
+          </button>
+        ) : (
+          <button
+            disabled={busy}
+            onClick={() => void handleUploadOnly()}
+            className="h-10 inline-flex items-center gap-2 px-4 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 border border-purple-400/60 text-white font-bold text-sm shadow-lg shadow-purple-950/40 transition"
+            title="Chỉ upload thẳng từ thư mục đang mở ở Ổ 1 lên Google Drive (KHÔNG chép Thẻ, KHÔNG qua Ổ 2). Có tạo Báo cáo PDF + 2 Thumbnail."
+          >
+            <CloudUpload className="w-4 h-4" /> Ổ 1 ➔ Drive
+          </button>
+        )}
 
         {/* 3. Chạy tự động toàn bộ chuỗi 4 cột */}
         {watching ? (
