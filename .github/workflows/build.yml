@@ -23,7 +23,7 @@ jobs:
             artifact_name: FrameBackup-Windows
             artifact_path: release/*.exe
           - os_label: macOS Apple Silicon (.dmg)
-            runner: macos-15
+            runner: macos-14
             build_cmd: npm run dist:mac
             artifact_name: FrameBackup-macOS-arm64
             artifact_path: release/*.dmg

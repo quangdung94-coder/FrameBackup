@@ -3,7 +3,7 @@
 ## 1. Dự án
 - **App:** FrameBackup (`com.quangdung.framebackup`) — 4-Column Video & Photo Backup Assistant (Windows `.exe` & macOS `.dmg`).
 - **Stack:** Electron 33 + React 18 + Vite 6 + TypeScript + Tailwind CSS (`xxhash-wasm`, `7zip-bin`, `exifr`, `ffmpeg-static`, `googleapis`, `chokidar`).
-- **Repo:** `quangdung94-coder/FrameBackup` | **Local:** `d:\Antigravity\03_Assitant Video`
+- **Repo:** `quangdung94-coder/FrameBackup` | **Local:** `d:\Antigravity\03_FrameBackup`
 - **Ngôn ngữ giao tiếp:** Tiếng Việt (ngắn gọn, rõ ràng).
 
 ## 2. Quy tắc BẮT BUỘC: Notion Hub
