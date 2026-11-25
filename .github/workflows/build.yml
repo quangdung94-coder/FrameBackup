@@ -43,7 +43,7 @@ jobs:
     secrets: inherit
     with:
       os_label: macOS Apple Silicon (.dmg)
-      runner: macos-14
+      runner: macos-latest
       build_cmd: npm run dist:mac
       artifact_name: FrameBackup-macOS-arm64
       artifact_path: release/*.dmg
