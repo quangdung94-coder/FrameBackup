@@ -4,7 +4,12 @@ import { google, type Auth } from 'googleapis';
 import type { DriveAuthStatus } from '../../shared/types';
 import { getTokenPath, getUserDataDir, readActiveClient } from './storage';
 
-const DRIVE_SCOPE = ['https://www.googleapis.com/auth/drive'];
+/**
+ * v1.4: chỉ xin quyền "file do app tạo / thư mục người dùng chọn" (drive.file — loại không nhạy cảm),
+ * nên Google không còn hiện màn hình "Google chưa xác minh ứng dụng này".
+ * Thư mục dán link mà app chưa được cấp => người dùng chọn 1 lần bằng Google Picker (picker.ts).
+ */
+const DRIVE_SCOPE = ['https://www.googleapis.com/auth/drive.file'];
 
 /** OAuth2 client đã có token (tự lưu token mới khi refresh). null nếu chưa đăng nhập. */
 export async function getAuthorizedOAuthClient(): Promise<Auth.OAuth2Client | null> {

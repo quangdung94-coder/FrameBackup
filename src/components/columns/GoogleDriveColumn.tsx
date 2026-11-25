@@ -18,6 +18,12 @@ interface GoogleDriveColumnProps {
   onDriveLinkChange: (value: string) => void;
   onCheckLink: () => void;
   onUploadFromDrive1: () => void;
+  /** v1.4: chọn / cấp quyền thư mục bằng Google Picker. */
+  /** @deprecated v1.4: gộp vào nút Check. */
+  onPickFolder?: () => void;
+  picking?: boolean;
+  /** Chuột phải trong cột Drive. */
+  onContextMenu?: (e: React.MouseEvent) => void;
 }
 
 function quotaFreeText(auth: DriveAuthStatus): string {
@@ -41,9 +47,16 @@ export function GoogleDriveColumn({
   onDriveLinkChange,
   onCheckLink,
   onUploadFromDrive1,
+  picking,
+  onContextMenu,
 }: GoogleDriveColumnProps) {
   return (
     <section
+      onContextMenu={(e) => {
+        // Ô nhập link giữ menu Cut / Copy / Paste của hệ thống
+        if ((e.target as HTMLElement).closest('input, textarea')) return;
+        onContextMenu?.(e);
+      }}
       style={style}
       className={`flex flex-col min-w-[160px] bg-[#18181c] border rounded-lg overflow-hidden ${
         expanded ? 'border-purple-500' : 'border-[#2b2b34]'
@@ -73,8 +86,16 @@ export function GoogleDriveColumn({
             {driveAuth.signedIn ? `${driveAuth.email}${quotaFreeText(driveAuth)}` : 'Chưa đăng nhập Google Drive'}
           </span>
           {folderCheck && (
-            <span className={folderCheck.canEdit ? 'text-emerald-400 font-semibold shrink-0' : 'text-red-400 font-semibold shrink-0'}>
-              {folderCheck.canEdit ? '✓ Editor' : '✕ Chỉ xem'}
+            <span
+              className={
+                folderCheck.canEdit
+                  ? 'text-emerald-400 font-semibold shrink-0'
+                  : folderCheck.needsPick
+                  ? 'text-amber-400 font-semibold shrink-0'
+                  : 'text-red-400 font-semibold shrink-0'
+              }
+            >
+              {folderCheck.canEdit ? '✓ Editor' : folderCheck.needsPick ? '⚠ Chưa cấp quyền' : '✕ Chỉ xem'}
             </span>
           )}
         </div>
@@ -95,13 +116,25 @@ export function GoogleDriveColumn({
           />
         </div>
         <button
-          disabled={checkingLink || !driveLink.trim()}
+          disabled={checkingLink || picking || (!driveLink.trim() && !driveAuth.signedIn)}
           onClick={onCheckLink}
+          title="Kiểm tra quyền thư mục. App chưa có quyền ghi thì tự mở bảng chọn thư mục của Google (chọn 1 lần). Chưa dán link thì mở bảng chọn để chọn thư mục."
           className="px-2 py-1 rounded bg-purple-600/80 hover:bg-purple-500 disabled:opacity-40 text-white text-[11px] font-semibold shrink-0"
         >
-          {checkingLink ? '...' : 'Check'}
+          {checkingLink || picking ? '...' : 'Check'}
         </button>
       </NavBar>
+      {(folderCheck?.needsPick || picking) && (
+        <div className="px-2 py-2 bg-amber-950/40 border-b border-amber-800/50 text-[11px] text-amber-100">
+          {picking ? (
+            <>Đang chờ anh chọn thư mục trong trình duyệt… Bấm <b>Chọn</b> trên bảng của Google.</>
+          ) : (
+            <>
+              App chưa có quyền ghi vào thư mục này. Bấm <b>Check</b>: bảng chọn của Google mở ra đúng thư mục đó, bấm <b>Chọn</b> 1 lần là xong.
+            </>
+          )}
+        </div>
+      )}
 
       <InfoStrip>
         <span className="truncate">

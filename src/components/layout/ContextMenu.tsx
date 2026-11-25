@@ -7,6 +7,10 @@ export interface ContextMenuItem {
   disabled?: boolean;
   /** Đường kẻ phân cách phía trên mục này. */
   separatorBefore?: boolean;
+  /** Dấu ✓ (mục chọn kiểu xem...). */
+  checked?: boolean;
+  /** Tiêu đề nhóm (không bấm được). */
+  heading?: boolean;
   onSelect: () => void;
 }
 
@@ -56,6 +60,7 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState | null; 
   }, [menu, onClose]);
 
   if (!menu) return null;
+  const hasChecks = menu.items.some((i) => i.checked !== undefined);
   return (
     <div
       ref={ref}
@@ -72,6 +77,9 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState | null; 
       {menu.items.map((item, i) => (
         <div key={`${item.label}-${i}`}>
           {item.separatorBefore && <div className="my-1 border-t border-[#3a3a46]" />}
+          {item.heading ? (
+            <div className="px-3 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{item.label}</div>
+          ) : (
           <button
             role="menuitem"
             disabled={item.disabled}
@@ -81,9 +89,13 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState | null; 
             }}
             className="w-full flex items-center justify-between gap-6 px-3 py-1.5 text-left hover:bg-blue-600/40 disabled:opacity-40 disabled:hover:bg-transparent"
           >
-            <span>{item.label}</span>
+            <span className="flex items-center gap-2">
+              {hasChecks && <span className="w-3 text-blue-300 text-[11px]">{item.checked ? '✓' : ''}</span>}
+              {item.label}
+            </span>
             {item.hint && <span className="text-[10.5px] text-zinc-500">{item.hint}</span>}
           </button>
+          )}
         </div>
       ))}
     </div>

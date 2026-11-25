@@ -49,7 +49,12 @@ export interface SharedWorkspace {
   driveAuth: DriveAuthStatus;
   driveFolderCheck: DriveFolderCheckResult | null;
   checkingDriveLink: boolean;
-  checkDriveLink: (link?: string, silent?: boolean) => Promise<void>;
+  checkDriveLink: (link?: string, silent?: boolean) => Promise<DriveFolderCheckResult | null>;
+  /** v1.4: chọn / cấp quyền thư mục Drive bằng Google Picker. */
+  pickDriveFolder: () => Promise<void>;
+  /** Nút Check: kiểm tra, chưa có quyền ghi thì tự mở bảng chọn thư mục. */
+  checkDriveAccess: () => Promise<void>;
+  pickingDriveFolder: boolean;
   openDriveAuth: () => void;
   uploadPack: UploadPackChoice;
   setUploadPack: (v: UploadPackChoice) => void;
@@ -61,7 +66,10 @@ export interface SharedWorkspace {
   /** Ghi lịch sử; `allowPowerAction` = được tự Sleep/Shutdown nếu không còn thẻ nào chạy. */
   finishJob: (tabId: string, entry: Omit<BackupHistoryItem, 'id' | 'completedAt'>, allowPowerAction: boolean) => void;
   /** Chạy lần lượt (nếu bật): chờ tới lượt rồi trả về hàm nhả lượt. */
-  acquireRunSlot: () => Promise<() => void>;
+  /** Xin lượt chạy (hỏi song song / xếp hàng nếu có thẻ khác đang chạy). null = người dùng Hủy. */
+  acquireRunSlot: (tabId: string) => Promise<(() => void) | null>;
+  parallelChoice: 'ask' | 'parallel' | 'queue';
+  setParallelChoice: (v: 'ask' | 'parallel' | 'queue') => void;
   /** Thẻ đã chép & verify trong phiên này (để Eject không hỏi lại). */
   verifiedCardRoots: Set<string>;
 }

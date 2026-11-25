@@ -26,6 +26,10 @@ export const IPC = {
     safeEject: 'disk:safeEject',
     deletePartFiles: 'disk:deletePartFiles',
   },
+  mediaView: {
+    probe: 'media:probe',
+    thumbnail: 'media:thumbnail',
+  },
   dialog: {
     pickDirectory: 'dialog:pickDirectory',
   },
@@ -58,6 +62,8 @@ export const IPC = {
     listBrowsers: 'drive:listBrowsers',
     useBuiltInClient: 'drive:useBuiltInClient',
     checkFolder: 'drive:checkFolder',
+    pickFolder: 'drive:pickFolder',
+    cancelPick: 'drive:cancelPick',
     upload: 'drive:upload',
     cancelUpload: 'drive:cancelUpload',
   },
@@ -70,6 +76,7 @@ export const IPC_EVENTS = {
   packageProgress: 'package:progress',
   driveUploadProgress: 'drive:uploadProgress',
   shotDates: 'disk:shotDates',
+  drivesChanged: 'disk:drivesChanged',
 } as const;
 
 export type IpcEventChannel = (typeof IPC_EVENTS)[keyof typeof IPC_EVENTS];

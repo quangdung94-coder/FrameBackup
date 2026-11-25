@@ -30,12 +30,12 @@ export interface FileMenuActions {
 export function buildFileMenu(targets: string[], file: FileEntry | null, a: FileMenuActions): ContextMenuItem[] {
   const items: ContextMenuItem[] = [];
   if (file) {
-    items.push({ label: file.isDirectory ? 'Mở thư mục' : 'Mở file', hint: 'Enter', onSelect: () => a.open(file) });
-    items.push({ label: `Hiện trong ${FILE_MANAGER_NAME}`, onSelect: () => a.reveal(file.fullPath) });
+    items.push({ label: 'Open', hint: 'Enter', onSelect: () => a.open(file) });
+    items.push({ label: `Show in ${FILE_MANAGER_NAME}`, onSelect: () => a.reveal(file.fullPath) });
     if (a.copyItems && targets.length > 0) {
       const copy = a.copyItems;
       items.push({
-        label: targets.length > 1 ? `Sao chép ${targets.length} mục` : 'Sao chép',
+        label: targets.length > 1 ? `Copy ${targets.length} items` : 'Copy',
         hint: 'Ctrl+C',
         separatorBefore: true,
         onSelect: () => copy(targets),
@@ -47,30 +47,30 @@ export function buildFileMenu(targets: string[], file: FileEntry | null, a: File
     }
     if (a.rename) {
       const rename = a.rename;
-      items.push({ label: 'Đổi tên', hint: 'F2', disabled: targets.length > 1, onSelect: () => rename(file) });
+      items.push({ label: 'Rename', hint: 'F2', disabled: targets.length > 1, onSelect: () => rename(file) });
     }
     items.push({
-      label: targets.length > 1 ? `Sao chép ${targets.length} đường dẫn` : 'Sao chép đường dẫn',
+      label: targets.length > 1 ? `Copy ${targets.length} paths` : 'Copy path',
       separatorBefore: true,
       onSelect: () => a.copyPaths(targets.length > 0 ? targets : [file.fullPath]),
     });
     if (a.properties) {
       const props = a.properties;
-      items.push({ label: 'Thuộc tính', hint: 'Alt+Enter', separatorBefore: true, onSelect: () => props(file.fullPath) });
+      items.push({ label: 'Properties', hint: 'Alt+Enter', separatorBefore: true, onSelect: () => props(file.fullPath) });
     }
   } else {
     if (a.paste) {
       const p = a.paste;
       items.push({ label: p.label, hint: 'Ctrl+V', disabled: p.disabled, onSelect: p.run });
     }
-    if (a.newFolder) items.push({ label: 'Thư mục mới', hint: 'Ctrl+Shift+N', onSelect: a.newFolder });
-    if (a.refresh) items.push({ label: 'Làm mới', hint: 'F5', separatorBefore: items.length > 0, onSelect: a.refresh });
+    if (a.newFolder) items.push({ label: 'New folder', hint: 'Ctrl+Shift+N', onSelect: a.newFolder });
+    if (a.refresh) items.push({ label: 'Refresh', hint: 'F5', separatorBefore: items.length > 0, onSelect: a.refresh });
     if (a.currentDir) {
       const dir = a.currentDir;
-      items.push({ label: `Mở thư mục này trong ${FILE_MANAGER_NAME}`, onSelect: () => a.reveal(dir) });
+      items.push({ label: `Open in ${FILE_MANAGER_NAME}`, onSelect: () => a.reveal(dir) });
       if (a.properties) {
         const props = a.properties;
-        items.push({ label: 'Thuộc tính', hint: 'Alt+Enter', separatorBefore: true, onSelect: () => props(dir) });
+        items.push({ label: 'Properties', hint: 'Alt+Enter', separatorBefore: true, onSelect: () => props(dir) });
       }
     }
     if (a.transfer && targets.length > 0) {
@@ -78,7 +78,7 @@ export function buildFileMenu(targets: string[], file: FileEntry | null, a: File
       items.push({ label: t.label(targets.length), separatorBefore: true, disabled: t.disabled, onSelect: () => t.run(targets) });
     }
   }
-  items.push({ label: 'Chọn tất cả', hint: 'Ctrl+A', separatorBefore: true, onSelect: a.selectAll });
-  items.push({ label: 'Bỏ chọn', hint: 'Esc', disabled: targets.length === 0, onSelect: a.clear });
+  items.push({ label: 'Select all', hint: 'Ctrl+A', separatorBefore: true, onSelect: a.selectAll });
+  items.push({ label: 'Select none', hint: 'Esc', disabled: targets.length === 0, onSelect: a.clear });
   return items;
 }

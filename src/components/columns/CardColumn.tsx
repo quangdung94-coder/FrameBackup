@@ -16,6 +16,7 @@ import {
   type FileEntry,
 } from '../../types/framebackup';
 import { FilePaneView } from '../files/FilePaneView';
+import { buildPathMenu, openContextMenu, type PathMenuActions } from '../../lib/globalMenu';
 import { FolderTree } from '../files/FolderTree';
 import { NavToolbar } from '../files/NavToolbar';
 import { ColumnFooter, ColumnHeader, DriveUsageRow, EmptyState, NavBar } from '../layout/ColumnParts';
@@ -40,6 +41,8 @@ interface CardColumnProps {
   quickExtFilter: string;
   onQuickExtFilter: (value: string) => void;
   scanning: boolean;
+  /** Thẻ đã bị rút khỏi máy (danh sách giữ lại để xem). */
+  cardRemoved?: boolean;
   /** Đang đọc ngày chụp ngầm (danh sách đã hiện). */
   shotDateProgress: { done: number; total: number } | null;
   /** Thư mục đang mở + Lùi / Tiến / Lên. */
@@ -49,6 +52,8 @@ interface CardColumnProps {
   onIncludeSidecarXml: (v: boolean) => void;
   onRefresh: () => void;
   onCommand: (cmd: ListCommand, targets: string[], focused: FileEntry | null) => void;
+  /** Chuột phải trên ổ đĩa / cây thư mục / thanh địa chỉ. */
+  pathActions?: PathMenuActions;
   /** Báo vùng chọn lên khu vực thẻ. */
   onSelectedChange: (selected: Set<string>) => void;
   /** Menu chuột phải / double-click / Enter (kiểu Explorer). */
@@ -80,7 +85,7 @@ export function CardColumn(props: CardColumnProps) {
   const [treePref, setTreePref] = useTreePref('fb_pane_card');
   const showTree = (treePref ?? props.expanded) && !isDemo;
   const hasXml = useMemo(() => props.extensionCounts.some(([ext]) => ext === '.xml'), [props.extensionCounts]);
-  const pane = useFilePane({ kind: 'static', items: displayedFiles, mode: ui.mode, query: ui.query, sort: ui.sort, rootPath: cardPath });
+  const pane = useFilePane({ kind: 'static', items: displayedFiles, mode: ui.mode, query: ui.query, sort: ui.sort, rootPath: cardPath, hideSidecar: ui.view.hideSidecar, groupBy: ui.view.groupBy, cameraFilter: ui.cameraFilter });
   const selection = useRowSelection(pane.visibleItems, isFileNotFolder);
   const { selected } = selection;
   const { onSelectedChange } = props;
@@ -135,11 +140,20 @@ export function CardColumn(props: CardColumnProps) {
           )
         }
       >
+        <div
+          onContextMenu={(e) =>
+            props.pathActions &&
+            props.driveInfo &&
+            openContextMenu(e, buildPathMenu(props.driveInfo.mountPath, 'drive', props.pathActions, { removable: props.driveInfo.isRemovable }))
+          }
+          title="Chuột phải: Open, New folder, Properties..."
+        >
         <DriveUsageRow
           tone="amber"
           usedPercent={driveInfo?.usedPercent ?? 0}
           text={driveInfo ? `${driveInfo.label} • Trống ${formatBytes(driveInfo.freeBytes)}` : 'Chọn thẻ nhớ hoặc ổ nguồn'}
         />
+        </div>
       </ColumnHeader>
 
       <NavBar>
@@ -161,6 +175,7 @@ export function CardColumn(props: CardColumnProps) {
         </select>
       </NavBar>
       <NavToolbar
+        pathActions={props.pathActions}
         nav={nav}
         drives={drives}
         treeOpen={showTree}
@@ -187,6 +202,11 @@ export function CardColumn(props: CardColumnProps) {
             : `${fileCount}/${props.allFilesCount} file`}
         </span>
       </div>
+      {props.cardRemoved && (
+        <div className="px-2 py-1 bg-amber-950/50 border-b border-amber-800/60 text-[10.5px] text-amber-200 shrink-0">
+          ⏏ Thẻ đã được rút khỏi máy — danh sách giữ lại để xem, không chép được nữa. Cắm lại thẻ để chép tiếp.
+        </div>
+      )}
       {props.shotDateProgress && (
         <div
           className="px-2 py-0.5 bg-blue-950/40 border-b border-blue-900/50 flex items-center gap-1.5 text-[10.5px] text-blue-200 shrink-0"
@@ -243,7 +263,7 @@ export function CardColumn(props: CardColumnProps) {
       <div className="flex-1 min-h-0 flex">
         {showTree && (
           <div className="w-[38%] max-w-[230px] min-w-[120px] border-r border-[#2b2b34] bg-[#16161b] shrink-0">
-            <FolderTree currentPath={cardPath} drives={drives} onNavigate={nav.go} />
+            <FolderTree currentPath={cardPath} drives={drives} onNavigate={nav.go} pathActions={props.pathActions} />
           </div>
         )}
         <div className="flex-1 min-w-0 flex flex-col">
@@ -258,6 +278,11 @@ export function CardColumn(props: CardColumnProps) {
         onQueryChange={ui.setQuery}
         sort={ui.sort}
         onSortChange={ui.setSort}
+        view={ui.view}
+        onViewChange={ui.setView}
+        groups={pane.groups}
+        cameraFilter={ui.cameraFilter}
+        onCameraFilterChange={ui.setCameraFilter}
         onOpen={props.menuActions.open}
         onGoUp={canGoUp ? nav.up : undefined}
         onCommand={(cmd, targets, focused) => {

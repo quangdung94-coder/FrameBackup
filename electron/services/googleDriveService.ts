@@ -15,4 +15,5 @@ export type {
 export { importOAuthCredentials, initGoogleDriveStorage, removeCustomClient } from './googleDrive/storage';
 export { cancelGoogleSignIn, getDriveAuthStatus, signInGoogleDrive, signOutGoogleDrive } from './googleDrive/auth';
 export { checkDriveFolderAccess, parseDriveFolderId } from './googleDrive/folders';
+export { cancelDrivePick, pickDriveFolder } from './googleDrive/picker';
 export { cancelDriveUpload, uploadProjectToDrive } from './googleDrive/upload';

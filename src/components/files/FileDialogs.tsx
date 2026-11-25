@@ -1,5 +1,6 @@
 import { FileText, Folder, HardDrive, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { parentDirOf } from '../../lib/paths';
 import { formatBytes, formatDateTime, type DriveInfo, type PathProperties } from '../../types/framebackup';
 
 export interface NamePrompt {
@@ -102,7 +103,7 @@ export function PropertiesDialog({ path, drives, onClose }: { path: string | nul
   const lower = path.toLowerCase();
   const drive = [...drives].sort((a, b) => b.mountPath.length - a.mountPath.length).find((d) => lower.startsWith(d.mountPath.toLowerCase()));
   const isDrive = Boolean(drive && drive.mountPath.replace(/[\\/]+$/, '').toLowerCase() === lower.replace(/[\\/]+$/, ''));
-  const parent = path.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '') || path;
+  const parent = parentDirOf(path);
   const Icon = isDrive ? HardDrive : props?.isDirectory === false ? FileText : Folder;
   const row = (k: string, v: React.ReactNode) => (
     <>

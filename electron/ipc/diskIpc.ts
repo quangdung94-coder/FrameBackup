@@ -3,13 +3,21 @@ import fs from 'node:fs/promises';
 import { listDirectoryEntries, listSystemDrives, scanFilesRecursive, VIEW_SCAN_OPTIONS } from '../services/diskService';
 import { deletePartFiles } from '../services/copyVerifyService';
 import { safeEjectDrive } from '../services/ejectService';
+import { startDriveWatcher } from '../services/driveWatcher';
+import { getMediaThumbnail, initMediaInfo, probeMediaInfo } from '../services/mediaInfoService';
 import { cancelShotDates, createFolder, getPathProperties, readShotDates, renamePath } from '../services/fileOpsService';
 import { IPC, IPC_EVENTS } from '../shared/ipcChannels';
-import type { ShotDateRequestItem, SpecialFolder } from '../shared/types';
+import type { MediaThumbRequest, ShotDateRequestItem, SpecialFolder } from '../shared/types';
 import type { IpcContext } from './context';
 
 export function registerDiskIpc(ctx: IpcContext) {
   ipcMain.handle(IPC.disk.listDrives, async () => listSystemDrives());
+  // v1.4 kiểu xem: thông tin clip, hình thu nhỏ, dải hình tua nhanh
+  initMediaInfo(app.getPath('userData'));
+  ipcMain.handle(IPC.mediaView.probe, async (_e, paths: string[]) => probeMediaInfo(Array.isArray(paths) ? paths.map(String) : []));
+  ipcMain.handle(IPC.mediaView.thumbnail, async (_e, req: MediaThumbRequest) => getMediaThumbnail({ path: String(req?.path ?? '') }));
+  // Cắm / rút thẻ, ổ cứng => báo giao diện danh sách ổ mới
+  startDriveWatcher((drives) => ctx.send(IPC_EVENTS.drivesChanged, drives));
   ipcMain.handle(IPC.disk.listDirectory, async (_event, dirPath: string) => listDirectoryEntries(dirPath, true));
   ipcMain.handle(IPC.disk.scanRecursive, async (_event, dirPath: string) => scanFilesRecursive(dirPath, true, VIEW_SCAN_OPTIONS));
   // Quét nhanh (hiện danh sách ngay), ngày chụp đọc ngầm sau

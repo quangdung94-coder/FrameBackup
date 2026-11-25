@@ -6,3 +6,4 @@ export * from './paths';
 export * from './driveLink';
 export * from './constants';
 export * from './report';
+export * from './cloudStorage';

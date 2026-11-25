@@ -21,6 +21,16 @@ interface ExplorerListOptions {
   /** Danh sách ảo hoá: chiều cao cố định mỗi dòng & phần tiêu đề dính phía trên (px). */
   rowHeight: number;
   headerHeight: number;
+  /** v1.4 kiểu Biểu tượng / Ô: lưới nhiều cột (mặc định 1 = danh sách). */
+  cols?: number;
+  cellWidth?: number;
+  /** Lề trong của vùng lưới (px), tính từ dưới tiêu đề. */
+  gridPad?: number;
+  /**
+   * v1.4 (nhóm theo ngày / loại): vị trí từng mục không đều => tự tính.
+   * top(i): toạ độ trên của mục i, tính từ dưới tiêu đề; hit(box): các mục nằm trong khung quét (toạ độ nội dung, gồm tiêu đề).
+   */
+  model?: { top: (i: number) => number; height: number; hit: (box: MarqueeRect) => number[] };
   /** Phím tắt kiểu Explorer: Ctrl+C / Ctrl+V / Ctrl+Shift+N / F2 / Alt+Enter / F5 / Alt+← / Alt+→. */
   onCommand?: (cmd: ListCommand, targets: string[], focused: FileEntry | null) => void;
 }
@@ -40,7 +50,21 @@ interface MarqueeRect {
  * chuột phải mở menu, phím tắt Ctrl+A / Esc / ↑ ↓ / Shift / Home / End / Enter / Backspace.
  * Kéo file đi (drag & drop) bắt đầu từ ô tên file (`data-drag-handle`), các ô khác dùng để quét chọn.
  */
-export function useExplorerList({ items, selection, onOpen, onGoUp, buildMenu, rowHeight, headerHeight, onCommand }: ExplorerListOptions) {
+export function useExplorerList({
+  items,
+  selection,
+  onOpen,
+  onGoUp,
+  buildMenu,
+  rowHeight,
+  headerHeight,
+  onCommand,
+  cols: colsOpt = 1,
+  cellWidth = 0,
+  gridPad = 0,
+  model,
+}: ExplorerListOptions) {
+  const cols = Math.max(1, colsOpt);
   const containerRef = useRef<HTMLDivElement>(null);
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
@@ -56,9 +80,9 @@ export function useExplorerList({ items, selection, onOpen, onGoUp, buildMenu, r
   const scrollRowIntoView = (index: number) => {
     const c = containerRef.current;
     if (!c) return;
-    const top = headerHeight + index * rowHeight;
-    const bottom = top + rowHeight;
-    if (top - headerHeight < c.scrollTop) c.scrollTop = top - headerHeight;
+    const top = model ? headerHeight + model.top(index) : headerHeight + gridPad + Math.floor(index / cols) * rowHeight;
+    const bottom = top + (model ? model.height : rowHeight);
+    if (top - headerHeight < c.scrollTop) c.scrollTop = Math.max(0, top - headerHeight - gridPad);
     else if (bottom > c.scrollTop + c.clientHeight) c.scrollTop = bottom - c.clientHeight;
   };
 
@@ -84,7 +108,7 @@ export function useExplorerList({ items, selection, onOpen, onGoUp, buildMenu, r
     let lastClientY = e.clientY;
     let moved = false;
     let rafId = 0;
-    let lastRange: [number, number] = [-1, -2];
+    let lastRange = '';
 
     const update = () => {
       const rect = container.getBoundingClientRect();
@@ -100,12 +124,33 @@ export function useExplorerList({ items, selection, onOpen, onGoUp, buildMenu, r
       };
       setMarquee(box);
       const count = latest.current.items.length;
-      const first = Math.max(0, Math.floor((box.top - headerHeight) / rowHeight));
-      const last = Math.min(count - 1, Math.floor((box.top + box.height - headerHeight - 0.01) / rowHeight));
-      if (first === lastRange[0] && last === lastRange[1]) return; // không đổi vùng chọn => không vẽ lại danh sách
-      lastRange = [first, last];
+      if (model) {
+        const hits = model.hit(box);
+        const key = hits.join(',');
+        if (key === lastRange) return;
+        lastRange = key;
+        latest.current.selection.applyMarquee(hits, base);
+        return;
+      }
+      const rowsTotal = Math.ceil(count / cols);
+      const first = Math.max(0, Math.floor((box.top - headerHeight - gridPad) / rowHeight));
+      const last = Math.min(rowsTotal - 1, Math.floor((box.top + box.height - headerHeight - gridPad - 0.01) / rowHeight));
+      let c0 = 0;
+      let c1 = 0;
+      if (cols > 1 && cellWidth > 0) {
+        c0 = Math.max(0, Math.floor((box.left - gridPad) / cellWidth));
+        c1 = Math.min(cols - 1, Math.floor((box.left + box.width - gridPad - 0.01) / cellWidth));
+      }
+      const key = `${first}:${last}:${c0}:${c1}`;
+      if (key === lastRange) return; // không đổi vùng chọn => không vẽ lại danh sách
+      lastRange = key;
       const hits: number[] = [];
-      for (let i = first; i <= last; i++) hits.push(i);
+      for (let r = first; r <= last; r++) {
+        for (let c = c0; c <= c1; c++) {
+          const i = r * cols + c;
+          if (i < count) hits.push(i);
+        }
+      }
       latest.current.selection.applyMarquee(hits, base);
     };
 
@@ -172,12 +217,16 @@ export function useExplorerList({ items, selection, onOpen, onGoUp, buildMenu, r
     else if (e.key === 'ArrowLeft' && e.altKey) run('back');
     else if (e.key === 'ArrowRight' && e.altKey) run('forward');
     else if (e.key === 'Escape') sel.clear();
-    else if (e.key === 'ArrowDown') {
-      const idx = sel.moveFocus(current + 1, e.shiftKey);
+    else if (cols > 1 && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      const next = current < 0 ? 0 : Math.max(0, Math.min(list.length - 1, current + (e.key === 'ArrowRight' ? 1 : -1)));
+      const idx = sel.moveFocus(next, e.shiftKey);
+      if (idx !== null) scrollRowIntoView(idx);
+    } else if (e.key === 'ArrowDown') {
+      const idx = sel.moveFocus(current < 0 ? 0 : Math.min(list.length - 1, current + cols), e.shiftKey);
       if (idx !== null) scrollRowIntoView(idx);
     } else if (e.key === 'ArrowUp' && e.altKey) goUp?.();
     else if (e.key === 'ArrowUp') {
-      const idx = sel.moveFocus(current < 0 ? 0 : current - 1, e.shiftKey);
+      const idx = sel.moveFocus(current < 0 ? 0 : Math.max(0, current - cols), e.shiftKey);
       if (idx !== null) scrollRowIntoView(idx);
     } else if (e.key === 'Home') {
       const idx = sel.moveFocus(0, e.shiftKey);

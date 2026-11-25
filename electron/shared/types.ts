@@ -264,6 +264,17 @@ export interface DriveFolderCheckResult {
   webViewLink?: string;
   files: DriveRemoteFile[];
   error?: string;
+  /** v1.4: app chưa được cấp quyền vào thư mục này (drive.file) — cần chọn 1 lần bằng Google Picker. */
+  needsPick?: boolean;
+}
+
+/** Kết quả chọn thư mục Google Drive bằng Google Picker. */
+export interface DrivePickResult {
+  ok: boolean;
+  folderId?: string;
+  folderName?: string;
+  cancelled?: boolean;
+  error?: string;
 }
 
 export interface DriveUploadItem {
@@ -459,6 +470,21 @@ export interface FileOpResult {
   path?: string;
 }
 
+/** v1.4: thông tin clip / ảnh cho kiểu xem (đọc lười, có thể thiếu trường). */
+export interface MediaInfo {
+  durationSec?: number;
+  width?: number;
+  height?: number;
+  fps?: number;
+  codec?: string;
+  /** Tên máy quay (Sony XML / EXIF / metadata). */
+  cameraModel?: string;
+}
+
+export interface MediaThumbRequest {
+  path: string;
+}
+
 export interface FrameBackupBridge {
   getSystemInfo: () => Promise<SystemInfo>;
   setPreventSleep: (enabled: boolean) => Promise<boolean>;
@@ -471,6 +497,8 @@ export interface FrameBackupBridge {
   readShotDates: (key: string, items: ShotDateRequestItem[]) => Promise<void>;
   cancelShotDates: (key: string) => Promise<void>;
   onShotDates: (cb: (ev: ShotDatesEvent) => void) => () => void;
+  /** Cắm / rút thẻ hoặc ổ cứng: danh sách ổ mới. */
+  onDrivesChanged?: (cb: (drives: DriveInfo[]) => void) => () => void;
   createFolder: (parentDir: string, name: string) => Promise<FileOpResult>;
   renamePath: (fullPath: string, newName: string) => Promise<FileOpResult>;
   getPathProperties: (fullPath: string) => Promise<PathProperties>;
@@ -512,6 +540,12 @@ export interface FrameBackupBridge {
   useBuiltInGoogleClient: () => Promise<DriveAuthStatus>;
   signOutGoogleDrive: () => Promise<DriveAuthStatus>;
   checkDriveFolder: (urlOrId: string) => Promise<DriveFolderCheckResult>;
+  /** v1.4: mở Google Picker trong trình duyệt để cấp quyền / chọn thư mục Drive. */
+  pickDriveFolder?: (startFolderId?: string, browserId?: string) => Promise<DrivePickResult>;
+  /** v1.4: kiểu xem — thông tin clip/ảnh, hình thu nhỏ. */
+  probeMediaInfo?: (paths: string[]) => Promise<Record<string, MediaInfo>>;
+  getMediaThumbnail?: (req: MediaThumbRequest) => Promise<string | null>;
+  cancelDrivePick?: () => Promise<boolean>;
   uploadToGoogleDrive: (req: DriveUploadRequest) => Promise<DriveUploadSummary>;
   cancelDriveUpload: (jobId?: string) => Promise<boolean>;
   onDriveUploadProgress: (cb: (ev: DriveUploadProgressEvent) => void) => () => void;

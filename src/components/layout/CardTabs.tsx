@@ -7,8 +7,8 @@ interface CardTabsProps {
   activeId: string;
   statuses: Record<string, WorkspaceStatus | undefined>;
   stores: Record<string, ProgressStore>;
-  sequential: boolean;
-  onSequentialChange: (v: boolean) => void;
+  parallelChoice: 'ask' | 'parallel' | 'queue';
+  onParallelChoiceChange: (v: 'ask' | 'parallel' | 'queue') => void;
   onSelect: (id: string) => void;
   onAdd: () => void;
   onClose: (id: string) => void;
@@ -112,7 +112,7 @@ function TabButton({
 }
 
 /** Thanh tab: mỗi thẻ nhớ 1 khu vực làm việc riêng, chạy song song. */
-export function CardTabs({ tabs, activeId, statuses, stores, sequential, onSequentialChange, onSelect, onAdd, onClose }: CardTabsProps) {
+export function CardTabs({ tabs, activeId, statuses, stores, parallelChoice, onParallelChoiceChange, onSelect, onAdd, onClose }: CardTabsProps) {
   return (
     <div className="bg-[#111114] border-b border-[#2b2b34] px-3 pt-2 flex items-end gap-1 shrink-0 overflow-x-auto">
       {tabs.map((t, i) => (
@@ -137,9 +137,17 @@ export function CardTabs({ tabs, activeId, statuses, stores, sequential, onSeque
       </button>
       <span className="flex-1" />
       {tabs.length > 1 && (
-        <label className="mb-1.5 inline-flex items-center gap-1.5 text-[11px] text-zinc-400 shrink-0 cursor-pointer" title="Tránh 2 thẻ cùng ghi 1 ổ HDD làm chậm cả hai">
-          <input type="checkbox" checked={sequential} onChange={(e) => onSequentialChange(e.target.checked)} className="accent-blue-500" />
-          Chạy lần lượt từng thẻ
+        <label className="mb-1.5 inline-flex items-center gap-1.5 text-[11px] text-zinc-400 shrink-0" title="Khi bấm chạy thẻ thứ hai lúc thẻ khác còn chạy. 2 thẻ cùng ghi 1 ổ HDD thường chậm hơn chạy lần lượt.">
+          Nhiều thẻ:
+          <select
+            value={parallelChoice}
+            onChange={(e) => onParallelChoiceChange(e.target.value as 'ask' | 'parallel' | 'queue')}
+            className="bg-[#101013] border border-[#2b2b34] rounded px-1 py-0.5 text-[11px] text-zinc-200 outline-none"
+          >
+            <option value="ask">Hỏi tôi</option>
+            <option value="parallel">Luôn song song</option>
+            <option value="queue">Luôn xếp hàng</option>
+          </select>
         </label>
       )}
     </div>

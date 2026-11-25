@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { specialIcon, useSpecialFolders } from '../../hooks/useSpecialFolders';
 import { pathSegments } from '../../lib/paths';
+import { buildPathMenu, openContextMenu, type PathMenuActions } from '../../lib/globalMenu';
 import type { DriveInfo } from '../../types/framebackup';
 
 const norm = (p: string) => p.replace(/[\\/]+$/, '').toLowerCase();
@@ -11,13 +12,26 @@ interface Node {
   label: string;
   icon: string;
   path: string;
+  kind: 'drive' | 'folder' | 'special';
+  removable?: boolean;
 }
 
 /**
  * Cây thư mục bên trái 1 cột (giống Air Explorer / Windows Explorer):
  * Desktop, Tài liệu, Tải về... và This PC với các ổ, mở từng cấp. Bấm 1 thư mục = mở nó ở danh sách bên phải.
  */
-export function FolderTree({ currentPath, drives, onNavigate }: { currentPath: string; drives: DriveInfo[]; onNavigate: (path: string) => void }) {
+export function FolderTree({
+  currentPath,
+  drives,
+  onNavigate,
+  pathActions,
+}: {
+  currentPath: string;
+  drives: DriveInfo[];
+  onNavigate: (path: string) => void;
+  /** Chuột phải trên ổ / thư mục (Open, New folder, Properties...). */
+  pathActions?: PathMenuActions;
+}) {
   const special = useSpecialFolders();
   const [open, setOpen] = useState<Set<string>>(() => new Set(['__pc']));
   const [children, setChildren] = useState<Map<string, Node[]>>(new Map());
@@ -29,7 +43,7 @@ export function FolderTree({ currentPath, drives, onNavigate }: { currentPath: s
     setLoading((s) => new Set(s).add(norm(path)));
     void api
       .listDirectory(path)
-      .then((list) => list.filter((f) => f.isDirectory).map((f) => ({ key: norm(f.fullPath), label: f.name, icon: '📁', path: f.fullPath })))
+      .then((list) => list.filter((f) => f.isDirectory).map((f) => ({ key: norm(f.fullPath), label: f.name, icon: '📁', path: f.fullPath, kind: 'folder' as const })))
       .catch(() => [] as Node[])
       .then((nodes) => {
         setChildren((m) => new Map(m).set(norm(path), nodes));
@@ -76,6 +90,9 @@ export function FolderTree({ currentPath, drives, onNavigate }: { currentPath: s
       <div
         key={`${n.key}-${depth}`}
         onClick={() => onNavigate(n.path)}
+        onContextMenu={(e) =>
+          pathActions && openContextMenu(e, buildPathMenu(n.path, n.kind, pathActions, { removable: n.removable, current: n.key === cur }))
+        }
         className={`flex items-center gap-1 pr-2 h-[22px] cursor-pointer whitespace-nowrap rounded-sm ${
           n.key === cur ? 'bg-blue-600/35 text-white' : 'text-zinc-300 hover:bg-white/[0.06]'
         }`}
@@ -104,7 +121,7 @@ export function FolderTree({ currentPath, drives, onNavigate }: { currentPath: s
     if (isOpen && kids) for (const k of kids) draw(k, depth + 1);
   };
 
-  for (const s of special) draw({ key: norm(s.path), label: s.label, icon: specialIcon(s.id), path: s.path }, 0);
+  for (const s of special) draw({ key: norm(s.path), label: s.label, icon: specialIcon(s.id), path: s.path, kind: 'special' }, 0);
   const pcOpen = open.has('__pc');
   rows.push(
     <div
@@ -120,7 +137,7 @@ export function FolderTree({ currentPath, drives, onNavigate }: { currentPath: s
     </div>
   );
   if (pcOpen) {
-    for (const d of drives) draw({ key: norm(d.mountPath), label: d.label, icon: d.isRemovable ? '💳' : '🖴', path: d.mountPath }, 1);
+    for (const d of drives) draw({ key: norm(d.mountPath), label: d.label, icon: d.isRemovable ? '💳' : '🖴', path: d.mountPath, kind: 'drive', removable: d.isRemovable }, 1);
   }
 
   return <div className="h-full overflow-auto py-1 text-[11.5px] select-none">{rows}</div>;

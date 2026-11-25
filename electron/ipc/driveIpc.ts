@@ -2,9 +2,11 @@ import { dialog, ipcMain, shell } from 'electron';
 import {
   cancelDriveUpload,
   cancelGoogleSignIn,
+  cancelDrivePick,
   checkDriveFolderAccess,
   getDriveAuthStatus,
   importOAuthCredentials,
+  pickDriveFolder,
   removeCustomClient,
   signInGoogleDrive,
   signOutGoogleDrive,
@@ -46,6 +48,13 @@ export function registerDriveIpc(ctx: IpcContext) {
   });
   ipcMain.handle(IPC.drive.signOut, async () => signOutGoogleDrive());
   ipcMain.handle(IPC.drive.checkFolder, async (_event, urlOrId: string) => checkDriveFolderAccess(urlOrId));
+  ipcMain.handle(IPC.drive.pickFolder, async (_event, startFolderId?: string, browserId?: string) =>
+    pickDriveFolder(
+      (url) => openUrlInBrowser(url, typeof browserId === 'string' ? browserId : undefined, (u) => shell.openExternal(u)),
+      typeof startFolderId === 'string' ? startFolderId : undefined
+    )
+  );
+  ipcMain.handle(IPC.drive.cancelPick, () => cancelDrivePick());
   ipcMain.handle(IPC.drive.upload, async (_event, req: DriveUploadRequest) =>
     uploadProjectToDrive(req, (progress) => ctx.send(IPC_EVENTS.driveUploadProgress, { ...progress, jobId: req.jobId }))
   );
@@ -57,4 +66,5 @@ export function registerDriveIpc(ctx: IpcContext) {
 export function stopDriveJobs() {
   cancelDriveUpload();
   cancelGoogleSignIn();
+  cancelDrivePick();
 }

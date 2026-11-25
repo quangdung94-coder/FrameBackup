@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight, ArrowUp, ChevronRight, FolderOpen, FolderTree, L
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FolderNav } from '../../hooks/useFolderNav';
 import { specialIcon, useSpecialFolders } from '../../hooks/useSpecialFolders';
+import { buildPathMenu, openContextMenu, type PathMenuActions } from '../../lib/globalMenu';
 import { pathSegments } from '../../lib/paths';
 import { formatBytes, type DriveInfo } from '../../types/framebackup';
 
@@ -92,6 +93,8 @@ interface NavToolbarProps {
   placeholder: string;
   /** Thẻ demo: không duyệt được. */
   disabled?: boolean;
+  /** Chuột phải trên từng đoạn của thanh địa chỉ. */
+  pathActions?: PathMenuActions;
 }
 
 const btn =
@@ -101,7 +104,7 @@ const btn =
  * Thanh điều hướng kiểu Explorer: ← Lùi, → Tiến, ↑ Lên, thanh địa chỉ bấm từng đoạn,
  * bấm › để sổ thư mục con, bấm vào chỗ trống của thanh địa chỉ để gõ đường dẫn.
  */
-export function NavToolbar({ nav, drives, treeOpen, onToggleTree, onRefresh, onPickFolder, placeholder, disabled }: NavToolbarProps) {
+export function NavToolbar({ nav, drives, treeOpen, onToggleTree, onRefresh, onPickFolder, placeholder, disabled, pathActions }: NavToolbarProps) {
   const special = useSpecialFolders();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -211,6 +214,14 @@ export function NavToolbar({ nav, drives, treeOpen, onToggleTree, onRefresh, onP
               <button
                 className={`h-full px-1 hover:bg-white/10 ${i === segs.length - 1 ? 'text-zinc-100 font-medium' : 'text-zinc-300'}`}
                 onClick={() => nav.go(s.path)}
+                onContextMenu={(e) => {
+                  if (!pathActions) return;
+                  const drive = i === 0 ? drives.find((d) => d.mountPath.replace(/[\\/]+$/, '').toLowerCase() === s.path.replace(/[\\/]+$/, '').toLowerCase()) : undefined;
+                  openContextMenu(
+                    e,
+                    buildPathMenu(s.path, i === 0 ? 'drive' : 'folder', pathActions, { removable: drive?.isRemovable, current: i === segs.length - 1 })
+                  );
+                }}
                 title={s.path}
               >
                 {s.label}

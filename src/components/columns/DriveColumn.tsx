@@ -9,6 +9,7 @@ import type { DragType } from '../../lib/dragData';
 import { buildFileMenu, type FileMenuActions } from '../../lib/fileMenu';
 import { formatBytes, type DriveInfo, type FileEntry } from '../../types/framebackup';
 import { FilePaneView } from '../files/FilePaneView';
+import { buildPathMenu, openContextMenu, type PathMenuActions } from '../../lib/globalMenu';
 import { FolderTree } from '../files/FolderTree';
 import { NavToolbar } from '../files/NavToolbar';
 import { ColumnFooter, ColumnHeader, DropOverlay, DriveUsageRow, EmptyState } from '../layout/ColumnParts';
@@ -31,6 +32,8 @@ interface DriveColumnProps {
   onPickFolder: () => void;
   /** Phím tắt Ctrl+C / Ctrl+V / Ctrl+Shift+N / F2 / Alt+Enter. */
   onCommand: (cmd: ListCommand, targets: string[], focused: FileEntry | null) => void;
+  /** Chuột phải trên ổ đĩa / cây thư mục / thanh địa chỉ. */
+  pathActions?: PathMenuActions;
   menuActions: Omit<FileMenuActions, 'selectAll' | 'clear'>;
   /** Báo vùng chọn lên khu vực thẻ (dùng cho nút ➔ và kéo thả). */
   onSelectedChange?: (selected: Set<string>) => void;
@@ -63,6 +66,9 @@ export function DriveColumn(props: DriveColumnProps) {
     rootPath: path,
     loadChildren,
     loadFlat,
+    hideSidecar: ui.view.hideSidecar,
+    groupBy: ui.view.groupBy,
+    cameraFilter: ui.cameraFilter,
   });
   const selection = useRowSelection(pane.visibleItems);
   const { onSelectedChange } = props;
@@ -114,6 +120,14 @@ export function DriveColumn(props: DriveColumnProps) {
         expanded={props.expanded}
         onToggleExpand={props.onToggleExpand}
       >
+        <div
+          onContextMenu={(e) =>
+            props.pathActions &&
+            props.driveInfo &&
+            openContextMenu(e, buildPathMenu(props.driveInfo.mountPath, 'drive', props.pathActions, { removable: props.driveInfo.isRemovable }))
+          }
+          title="Chuột phải: Open, New folder, Properties..."
+        >
         <DriveUsageRow
           tone={tone}
           insufficient={props.insufficient}
@@ -128,9 +142,11 @@ export function DriveColumn(props: DriveColumnProps) {
               : 'Chọn thư mục Ổ 2 (HDD/SSD Backup)'
           }
         />
+        </div>
       </ColumnHeader>
 
       <NavToolbar
+        pathActions={props.pathActions}
         nav={nav}
         drives={props.drives}
         treeOpen={showTree}
@@ -145,7 +161,7 @@ export function DriveColumn(props: DriveColumnProps) {
       <div className="flex-1 min-h-0 flex">
         {showTree && (
           <div className="w-[38%] max-w-[230px] min-w-[120px] border-r border-[#2b2b34] bg-[#16161b] shrink-0">
-            <FolderTree currentPath={path} drives={props.drives} onNavigate={nav.go} />
+            <FolderTree currentPath={path} drives={props.drives} onNavigate={nav.go} pathActions={props.pathActions} />
           </div>
         )}
         <div className="flex-1 min-w-0 flex flex-col">
@@ -160,6 +176,11 @@ export function DriveColumn(props: DriveColumnProps) {
         onQueryChange={ui.setQuery}
         sort={ui.sort}
         onSortChange={ui.setSort}
+        view={ui.view}
+        onViewChange={ui.setView}
+        groups={pane.groups}
+        cameraFilter={ui.cameraFilter}
+        onCameraFilterChange={ui.setCameraFilter}
         onOpen={props.menuActions.open}
         onGoUp={nav.canUp ? nav.up : undefined}
         onCommand={(cmd, targets, focused) => {

@@ -19,6 +19,8 @@ export const STORAGE_KEYS = {
   loginBrowser: 'fb_login_browser',
   uploadOnlyPack: 'fb_upload_only_pack',
   sequentialRuns: 'fb_sequential_runs',
+  /** v1.4: khi chạy thẻ thứ hai lúc thẻ khác còn chạy: 'ask' | 'parallel' | 'queue'. */
+  parallelChoice: 'fb_parallel_choice',
 } as const;
 
 export function loadSavedString(key: string, fallback = ''): string {

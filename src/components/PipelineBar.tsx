@@ -101,9 +101,9 @@ export function PipelineBar({
           )}
           <button
             onClick={onOpenReportPreview}
-            className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-[#24242d] hover:bg-[#30303d] border border-[#424252] text-zinc-100 text-xs font-semibold transition"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#24242d] hover:bg-[#30303d] border border-[#424252] text-zinc-100 text-base font-bold transition"
           >
-            <Eye className="w-4 h-4 text-purple-400" />
+            <Eye className="w-5 h-5 text-purple-400" />
             Xem trước Báo cáo Drive & 2 Thumbnail
           </button>
         </div>

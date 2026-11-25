@@ -74,15 +74,33 @@ export async function checkDriveFolderAccess(folderUrlOrId: string): Promise<Dri
       canEdit,
       webViewLink: meta.data.webViewLink || driveFolderWebLink(folderId),
       files,
-      error: canEdit ? undefined : 'Tài khoản Google của anh chỉ có quyền Xem (Viewer), không có quyền Editor để upload!',
+      // drive.file: thư mục công khai / chia sẻ vẫn đọc được tên, nhưng app chỉ ghi được sau khi người dùng chọn qua Picker.
+      // Nên khi chưa ghi được => mời "Cấp quyền thư mục" trước; nếu đã chọn mà vẫn không ghi được thì tài khoản thật sự chỉ có quyền Xem.
+      needsPick: canEdit ? undefined : true,
+      error: canEdit
+        ? undefined
+        : 'Chưa ghi được vào thư mục này. Bấm "Cấp quyền thư mục" và chọn đúng thư mục này 1 lần. Nếu đã chọn mà vẫn báo, nghĩa là tài khoản đang đăng nhập chỉ có quyền Xem: chủ thư mục cần thêm tài khoản này làm Editor (link công khai thường chỉ cho Xem).',
     };
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // drive.file: thư mục chưa được người dùng chọn cho app => Google trả 404 / 403
+    const code = (err as { code?: number | string })?.code;
+    if (code === 404 || code === 403 || /not found|insufficient/i.test(msg)) {
+      return {
+        ok: false,
+        folderId,
+        canEdit: false,
+        files: [],
+        needsPick: true,
+        error: 'App chưa được cấp quyền vào thư mục này — bấm "Cấp quyền thư mục" và chọn thư mục 1 lần.',
+      };
+    }
     return {
       ok: false,
       folderId,
       canEdit: false,
       files: [],
-      error: `Không truy cập được thư mục Drive: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Không truy cập được thư mục Drive: ${msg}`,
     };
   }
 }

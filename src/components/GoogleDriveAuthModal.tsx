@@ -96,25 +96,25 @@ export function GoogleDriveAuthModal({ open, onClose, authStatus, onAuthChanged,
         if (e.target === e.currentTarget && !waitingBrowser) onClose();
       }}
     >
-      <div className="bg-[#1e1e24] border border-[#3e3e4b] rounded-xl w-[560px] max-w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
-        <div className="px-4 py-3 border-b border-[#2b2b34] flex items-center justify-between">
-          <div className="flex items-center gap-2 font-bold text-sm text-zinc-100">
-            <Cloud className="w-4 h-4 text-purple-400" />
+      <div className="bg-[#1e1e24] border border-[#3e3e4b] rounded-xl w-[760px] max-w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+        <div className="px-5 py-4 border-b border-[#2b2b34] flex items-center justify-between">
+          <div className="flex items-center gap-2 font-bold text-lg text-zinc-100">
+            <Cloud className="w-5 h-5 text-purple-400" />
             Kết nối Google Drive
           </div>
           <button
             onClick={onClose}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#272730] hover:bg-[#32323e] text-zinc-300 text-xs"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#272730] hover:bg-[#32323e] text-zinc-300 text-sm"
           >
             <X className="w-3.5 h-3.5" /> Đóng
           </button>
         </div>
 
-        <div className="p-4 overflow-y-auto space-y-3 text-xs">
+        <div className="p-5 overflow-y-auto space-y-4 text-sm">
           {authStatus.signedIn ? (
-            <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/35 space-y-2">
-              <div className="flex items-center gap-2 text-emerald-300 font-bold text-[13px]">
-                <CheckCircle2 className="w-5 h-5" /> Đã đăng nhập Google Drive
+            <div className="p-5 rounded-lg bg-emerald-500/10 border border-emerald-500/35 space-y-3 text-base">
+              <div className="flex items-center gap-2 text-emerald-300 font-bold text-xl">
+                <CheckCircle2 className="w-6 h-6" /> Đã đăng nhập Google Drive
               </div>
               <div className="text-zinc-200">
                 👤 {authStatus.displayName} <span className="text-zinc-400">({authStatus.email})</span>

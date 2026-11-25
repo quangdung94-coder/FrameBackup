@@ -7,6 +7,9 @@ export interface StoredOAuthClient {
   client_id: string;
   client_secret: string;
   redirect_uris?: string[];
+  /** v1.4: Google Picker (chọn thư mục) — API key + Project number của cùng project Google Cloud. */
+  picker_api_key?: string;
+  project_number?: string;
 }
 
 let userDataDir = '';
@@ -38,7 +41,15 @@ function parseClientJson(raw: string): StoredOAuthClient | null {
     const json = JSON.parse(raw);
     const cfg = json.installed || json.web || json;
     if (cfg && typeof cfg.client_id === 'string' && typeof cfg.client_secret === 'string') {
-      return { client_id: cfg.client_id, client_secret: cfg.client_secret, redirect_uris: cfg.redirect_uris };
+      const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+      return {
+        client_id: cfg.client_id,
+        client_secret: cfg.client_secret,
+        redirect_uris: cfg.redirect_uris,
+        // Cho phép đặt ở gốc file JSON hoặc trong mục installed / web
+        picker_api_key: str(json.picker_api_key) ?? str(cfg.picker_api_key),
+        project_number: str(json.project_number) ?? str(cfg.project_number),
+      };
     }
   } catch {
     // ignore
@@ -59,7 +70,14 @@ export async function readStoredClient(): Promise<StoredOAuthClient | null> {
 export async function readBundledClient(): Promise<StoredOAuthClient | null> {
   const envId = process.env.FB_GOOGLE_CLIENT_ID;
   const envSecret = process.env.FB_GOOGLE_CLIENT_SECRET;
-  if (envId && envSecret) return { client_id: envId, client_secret: envSecret };
+  if (envId && envSecret) {
+    return {
+      client_id: envId,
+      client_secret: envSecret,
+      picker_api_key: process.env.FB_GOOGLE_PICKER_KEY || undefined,
+      project_number: process.env.FB_GOOGLE_PROJECT_NUMBER || undefined,
+    };
+  }
   for (const dir of bundledClientDirs) {
     try {
       const cfg = parseClientJson(await fsp.readFile(path.join(dir, BUNDLED_CLIENT_FILE), 'utf8'));

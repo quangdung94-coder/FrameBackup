@@ -4,6 +4,7 @@ import { NameDialog, PropertiesDialog, type NamePrompt } from '../components/fil
 import { CardColumn, type CardMode } from '../components/columns/CardColumn';
 import { DriveColumn } from '../components/columns/DriveColumn';
 import { GoogleDriveColumn } from '../components/columns/GoogleDriveColumn';
+import { CloudDriveWarningModal, type CloudWarning } from '../components/CloudDriveWarningModal';
 import { ConflictModal, type ConflictPrompt } from '../components/ConflictModal';
 import { DateMismatchAlert } from '../components/DateMismatchAlert';
 import { BottomPanelSplitter, CopyArrowSplitter, ResizeSplitter } from '../components/layout/Splitters';
@@ -18,11 +19,13 @@ import { buildDateGroups, countExtensions, countMismatchFiles, countSidecarXml, 
 import { createDemoCardFiles } from '../lib/demo';
 import { DRAG_TYPES } from '../lib/dragData';
 import type { FileMenuActions } from '../lib/fileMenu';
-import { baseNameOf, folderCopyTarget, isDemoPath, isDriveRoot, parentDirOf, trimTrailingSeparators } from '../lib/paths';
+import { baseNameOf, folderCopyTarget, isDemoPath, isDriveRoot, isSameOrInside, parentDirOf, trimTrailingSeparators } from '../lib/paths';
+import { openContextMenu, type PathMenuActions } from '../lib/globalMenu';
 import type { ProgressStore } from '../lib/progressStore';
 import { buildDriveUploadItems, buildReportUploadItems } from '../lib/uploadPlan';
 import {
   CANCELLED,
+  detectCloudStorage,
   formatBytes,
   formatDateTime,
   parseGoogleDriveFolderId,
@@ -54,12 +57,16 @@ interface CardWorkspaceProps {
   progress: ProgressStore;
   /** Thẻ gợi ý cho khu vực mới (ổ rời chưa có khu vực nào dùng). */
   initialSource?: string;
+  /** Thẻ vừa cắm vào máy, giao cho khu vực này (v1.4). */
+  cardInsert?: { path: string; seq: number };
   onCamFolderChange: (value: string) => void;
   onStatus: (tabId: string, status: WorkspaceStatus) => void;
 }
 
 type ColumnId = 'card' | 'd1' | 'd2';
 const COL_NAME: Record<ColumnId, string> = { card: 'Thẻ nhớ', d1: 'Ổ 1', d2: 'Ổ 2' };
+/** Tên cột trong menu chuột phải (tiếng Anh). */
+const COL_EN: Record<ColumnId, string> = { card: 'Card', d1: 'Drive 1', d2: 'Drive 2' };
 
 interface RunOpts {
   skipStep2?: boolean;
@@ -72,7 +79,10 @@ interface RunOpts {
 }
 
 /** 1 khu vực làm việc cho 1 thẻ nhớ: 4 cột Thẻ ➔ Ổ 1 ➔ Ổ 2 ➔ Drive + thanh tiến trình riêng. */
-export function CardWorkspace({ tab, active, tabCount, shared, progress, initialSource, onCamFolderChange, onStatus }: CardWorkspaceProps) {
+/** Nơi ổ ảo anh đã bấm "Tôi hiểu" trong lần mở app này (dùng chung mọi tab thẻ). */
+const cloudWarningAcked = new Set<string>();
+
+export function CardWorkspace({ tab, active, tabCount, shared, progress, initialSource, cardInsert, onCamFolderChange, onStatus }: CardWorkspaceProps) {
   const jobId = tab.id;
   const { showToast, layout } = shared;
 
@@ -156,6 +166,11 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     return shared.drives.find((d) => n.startsWith(d.mountPath.toLowerCase()));
   };
   const cardDriveInfo = driveOf(cardPath);
+  // Thẻ đã rút: trước đó thấy ổ của thẻ, giờ không còn
+  const seenCardDriveRef = useRef<string | null>(null);
+  if (cardDriveInfo) seenCardDriveRef.current = cardDriveInfo.mountPath.toLowerCase();
+  const cardRemoved =
+    Boolean(cardPath) && !isDemoPath(cardPath) && !cardDriveInfo && seenCardDriveRef.current !== null && cardPath.toLowerCase().startsWith(seenCardDriveRef.current);
   const cardLabel = isDemoPath(cardPath) ? 'Thẻ demo' : cardDriveInfo?.label ?? (cardPath ? cardPath.split(/[\\/]/).filter(Boolean).pop() ?? cardPath : '');
   useEffect(() => {
     onStatus(tab.id, {
@@ -195,6 +210,33 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     for (const f of cardFiles) if (cardSelected.has(f.fullPath)) s += f.sizeBytes;
     return s;
   }, [cardFiles, cardSelected]);
+
+  const handlePickFolderRef = useRef<((col: 1 | 2 | 3) => Promise<void>) | null>(null);
+  // ---- v1.4 mục 5: Ổ 1 / Ổ 2 là ổ ảo đám mây => cảnh báo to giữa màn hình (1 lần / nơi / lần mở app) ----
+  const [cloudWarning, setCloudWarning] = useState<CloudWarning | null>(null);
+  useEffect(() => {
+    if (cloudWarning || !active) return;
+    for (const [column, p] of [['Ổ 1', drive1View], ['Ổ 2', drive2View]] as const) {
+      const hit = detectCloudStorage(p, shared.drives);
+      const lower = p.toLowerCase();
+      // So theo tiền tố: gốc có thể đổi từ "g:\\my drive" sang "g:\\" khi danh sách ổ đọc xong
+      if (hit && ![...cloudWarningAcked].some((k) => lower.startsWith(k))) {
+        setCloudWarning({ column, path: p, hit });
+        return;
+      }
+    }
+  }, [drive1View, drive2View, shared.drives, cloudWarning, active]);
+  const acceptCloudWarning = () => {
+    if (cloudWarning) cloudWarningAcked.add(cloudWarning.hit.rootKey);
+    setCloudWarning(null);
+  };
+  const chooseOtherThanCloud = () => {
+    if (!cloudWarning) return;
+    cloudWarningAcked.add(cloudWarning.hit.rootKey);
+    const col = cloudWarning.column === 'Ổ 1' ? 2 : 3;
+    setCloudWarning(null);
+    void handlePickFolderRef.current?.(col);
+  };
 
   const d1DriveInfo = driveOf(drive1View);
   const d2DriveInfo = driveOf(drive2View);
@@ -256,6 +298,20 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     setQuickExtFilter('all');
     setBackupReport(null);
   };
+
+  // Cắm lại đúng thẻ vừa rút => đọc lại danh sách
+  const wasRemovedRef = useRef(false);
+  useEffect(() => {
+    if (wasRemovedRef.current && !cardRemoved && cardPath) void refreshCardSmart(cardPath);
+    wasRemovedRef.current = cardRemoved;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardRemoved]);
+
+  // Cắm thẻ mới khi khu vực này đang trống => tự mở thẻ
+  useEffect(() => {
+    if (cardInsert && !cardPath) selectCardSource(cardInsert.path);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardInsert?.seq]);
 
   // Ngày chụp đọc ngầm về từng đợt => cập nhật danh sách thẻ
   useEffect(() => {
@@ -432,11 +488,31 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
   };
 
   /** Chờ tới lượt (nếu bật "chạy lần lượt"), rồi đánh dấu đang chạy. Trả về hàm kết thúc. */
-  const beginRun = async (): Promise<() => void> => {
+  // Cả chuỗi Thẻ ➔ Ổ 1 ➔ Ổ 2 ➔ Drive giữ 1 lượt xuyên suốt (không nhả giữa các bước => thẻ khác không chen vào giữa)
+  const holdRef = useRef<(() => void) | null>(null);
+  const releaseHold = () => {
+    const h = holdRef.current;
+    holdRef.current = null;
+    h?.();
+  };
+  const beginRun = async (keepForPipeline = false): Promise<(() => void) | null> => {
+    if (holdRef.current) {
+      // Đã giữ lượt từ đầu chuỗi: chỉ bật cờ đang chạy
+      setIsRunning(true);
+      return () => setIsRunning(false);
+    }
     setWaitingSlot(true);
-    const release = await shared.acquireRunSlot();
+    const release = await shared.acquireRunSlot(tab.id);
     setWaitingSlot(false);
+    if (!release) {
+      showToast('Đã hủy chạy thẻ này.');
+      return null;
+    }
     setIsRunning(true);
+    if (keepForPipeline) {
+      holdRef.current = release;
+      return () => setIsRunning(false);
+    }
     return () => {
       setIsRunning(false);
       release();
@@ -452,6 +528,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     const d2Dir = d2View ? folderCopyTarget(sourceOnDrive1, d2View) : '';
     const stagingName = t.camFolder.trim() ? `${show}_${t.camFolder.trim()}` : show;
     const end = await beginRun();
+    if (!end) return;
     try {
       const notes = [...(opts.notes ?? [])];
       let drive2VerifiedNow = false;
@@ -582,6 +659,14 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
 
   // ---- Nút chính: chạy cả chuỗi cho thẻ này ----
   const handleRunFullPipeline = async () => {
+    try {
+      await runFullPipelineInner();
+    } finally {
+      releaseHold();
+    }
+  };
+
+  const runFullPipelineInner = async () => {
     const api = window.frameBackup;
     if (!api) {
       showToast('Hãy mở app bằng Electron (npm run dev) để chạy Copy & Verify thật.');
@@ -643,7 +728,8 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     progress.set({ step1: null, step2: null, step3: null, step4: null, watch: null });
     setMediaReport(null);
     setBackupReport(null);
-    const end = await beginRun();
+    const end = await beginRun(true);
+    if (!end) return;
     let res1: CopyVerifySummary;
     try {
       await keepAwake();
@@ -730,6 +816,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     if (!req1) return;
     progress.set({ step1: null });
     const end = await beginRun();
+    if (!end) return;
     try {
       await keepAwake();
       const res1 = await api.startCopyVerify(req1);
@@ -781,6 +868,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     if (!req2) return;
     progress.set({ step2: null });
     const end = await beginRun();
+    if (!end) return;
     try {
       await keepAwake();
       const res2 = await api.startCopyVerify(req2);
@@ -810,9 +898,9 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     showToast(`📋 Đã sao chép ${paths.length} mục ở ${COL_NAME[from]} — mở cột đích, chuột phải > Dán (Ctrl+V).`);
   };
   const pasteLabel = (to: ColumnId): { label: string; disabled: boolean } => {
-    if (!clip) return { label: 'Dán', disabled: true };
+    if (!clip) return { label: 'Paste', disabled: true };
     const ok = (clip.from === 'card' && to === 'd1') || (clip.from === 'd1' && to === 'd2') || (clip.from === 'd2' && to === 'd1');
-    return { label: `Dán ${clip.paths.length} mục từ ${COL_NAME[clip.from]} (Verify)`, disabled: !ok || busy };
+    return { label: `Paste ${clip.paths.length} item${clip.paths.length > 1 ? 's' : ''} from ${COL_EN[clip.from]} (verify)`, disabled: !ok || busy };
   };
   const pasteInto = (to: ColumnId) => {
     if (!clip) {
@@ -832,8 +920,12 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
   const colDir = (col: ColumnId) => (col === 'card' ? cardPath : col === 'd1' ? drive1View : drive2View);
   const refreshCol = (col: ColumnId) =>
     col === 'card' ? refreshCardSmart(cardPath) : col === 'd1' ? refreshDrive1View() : refreshDrive2View();
-  function openNewFolder(col: ColumnId) {
-    const parent = colDir(col);
+  function openNewFolder(col: ColumnId, parentOverride?: string) {
+    const parent = parentOverride ?? colDir(col);
+    if (col === 'card') {
+      showToast('App không ghi lên thẻ nhớ (thẻ chỉ là nguồn) — tạo thư mục ở Ổ 1 hoặc Ổ 2.');
+      return;
+    }
     if (!parent || isDemoPath(parent) || !window.frameBackup?.createFolder) {
       showToast('Hãy mở 1 thư mục trước.');
       return;
@@ -841,7 +933,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     setNamePrompt({
       title: `Thư mục mới trong ${COL_NAME[col]}`,
       label: parent,
-      initial: col === 'card' ? 'Thư mục mới' : showName || 'Thư mục mới',
+      initial: showName || 'Thư mục mới',
       confirmLabel: 'Tạo',
       onSubmit: async (name) => {
         const r = await window.frameBackup!.createFolder(parent, name);
@@ -852,22 +944,28 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
       },
     });
   }
-  const openRename = (col: ColumnId, file: FileEntry) => {
-    if (isDemoPath(file.fullPath) || !window.frameBackup?.renamePath) return;
+  const openRenamePath = (col: ColumnId, fullPath: string) => {
+    if (col === 'card' || isDemoPath(fullPath) || !window.frameBackup?.renamePath) return;
+    const oldName = baseNameOf(trimTrailingSeparators(fullPath)) ?? fullPath;
     setNamePrompt({
       title: 'Đổi tên',
-      label: file.fullPath,
-      initial: file.name,
+      label: fullPath,
+      initial: oldName,
       confirmLabel: 'Đổi tên',
       onSubmit: async (name) => {
-        const r = await window.frameBackup!.renamePath(file.fullPath, name);
+        const r = await window.frameBackup!.renamePath(fullPath, name);
         if (!r.ok) return r.message;
         showToast(r.message);
-        await refreshCol(col);
+        // Đang mở chính thư mục đó (hoặc bên trong) => đi theo tên mới
+        const nav = col === 'd1' ? drive1Nav : drive2Nav;
+        const old = trimTrailingSeparators(fullPath);
+        if (r.path && isSameOrInside(nav.path, old)) nav.reset(r.path + nav.path.slice(old.length));
+        else await refreshCol(col);
         return null;
       },
     });
   };
+  const openRename = (col: ColumnId, file: FileEntry) => openRenamePath(col, file.fullPath);
   const openProperties = (fullPath: string) => {
     if (!fullPath || isDemoPath(fullPath)) return;
     setPropsPath(fullPath);
@@ -882,6 +980,20 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
       else if (cmd === 'rename' && focused && col !== 'card') openRename(col, focused);
       else if (cmd === 'properties') openProperties(focused?.fullPath ?? colDir(col));
     };
+
+  // Chuột phải trên ổ đĩa / cây thư mục / thanh địa chỉ của từng cột
+  const pathActionsFor = (col: ColumnId): PathMenuActions => ({
+    open: (p) => (col === 'card' ? cardNav.go(p) : col === 'd1' ? drive1Nav.go(p) : drive2Nav.go(p)),
+    reveal: (p) => void window.frameBackup?.openPath(p),
+    newFolderIn: col === 'card' ? undefined : (parent) => openNewFolder(col, parent),
+    rename: col === 'card' ? undefined : (p) => openRenamePath(col, p),
+    properties: openProperties,
+    eject: (mount) => {
+      if (cardPath && cardPath.toLowerCase().startsWith(mount.toLowerCase())) void handleSafeEject();
+      else void window.frameBackup?.safeEject(mount).then((r) => showToast(r.message));
+    },
+    refresh: () => void refreshCol(col),
+  });
 
   const handleCancel = async () => {
     const api = window.frameBackup;
@@ -925,6 +1037,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     setAlertDismissed(false);
   };
 
+  handlePickFolderRef.current = (col) => handlePickFolder(col);
   const handlePickFolder = async (col: 1 | 2 | 3) => {
     const api = window.frameBackup;
     if (!api) {
@@ -979,7 +1092,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     currentDir: isDemoPath(cardPath) ? undefined : cardPath || undefined,
     refresh: cardPath && !isDemoPath(cardPath) ? () => void refreshCardSmart(cardPath) : undefined,
     transfer: {
-      label: (n) => `Copy ${n} mục sang Ổ 1 (Verify XXHash64)`,
+      label: (n) => `Copy ${n} item${n > 1 ? 's' : ''} to Drive 1 (verify XXHash64)`,
       run: (paths) => void handleCopyCardToDrive1Only(paths),
       disabled: busy,
     },
@@ -993,7 +1106,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     currentDir: drive1View || undefined,
     refresh: drive1View ? () => void refreshDrive1View() : undefined,
     transfer: {
-      label: (n) => `Sao lưu ${n} mục sang Ổ 2 (Verify XXHash64)`,
+      label: (n) => `Back up ${n} item${n > 1 ? 's' : ''} to Drive 2 (verify XXHash64)`,
       run: (paths) => void handleCopyDrive1ToDrive2Only(paths),
       disabled: busy || !drive2View,
     },
@@ -1154,12 +1267,14 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
           quickExtFilter={quickExtFilter}
           onQuickExtFilter={setQuickExtFilter}
           scanning={cardScanning}
+          cardRemoved={cardRemoved}
           shotDateProgress={shotDateProgress}
           nav={cardNav}
           includeSidecarXml={shared.includeSidecarXml}
           onIncludeSidecarXml={shared.setIncludeSidecarXml}
           onRefresh={() => cardPath && !isDemoPath(cardPath) && void refreshCardSmart(cardPath)}
           onCommand={commandFor('card')}
+          pathActions={pathActionsFor('card')}
           onSelectedChange={setCardSelected}
           totalBytes={totalCardBytes}
           targetDate={shared.targetDate}
@@ -1198,6 +1313,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
           dropHandlers={drive1Drop.handlers}
           onRefresh={() => void refreshDrive1View()}
           onCommand={commandFor('d1')}
+          pathActions={pathActionsFor('d1')}
           onPickFolder={() => handlePickFolder(2)}
           menuActions={drive1MenuActions}
           onSelectedChange={setD1Selected}
@@ -1255,6 +1371,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
           dropHandlers={drive2Drop.handlers}
           onRefresh={() => void refreshDrive2View()}
           onCommand={commandFor('d2')}
+          pathActions={pathActionsFor('d2')}
           onPickFolder={() => handlePickFolder(3)}
           menuActions={drive2MenuActions}
           footerRight={<span className="text-emerald-400">Backup</span>}
@@ -1274,8 +1391,41 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
           uploadDisabled={busy}
           onOpenAuth={shared.openDriveAuth}
           onDriveLinkChange={shared.setDriveLink}
-          onCheckLink={() => void shared.checkDriveLink()}
+          onCheckLink={() => void shared.checkDriveAccess()}
           onUploadFromDrive1={() => void handleUploadOnly()}
+          onPickFolder={() => void shared.pickDriveFolder()}
+          picking={shared.pickingDriveFolder}
+          onContextMenu={(e) => {
+            const api = window.frameBackup;
+            const link = shared.driveLink.trim();
+            const signedIn = shared.driveAuth.signedIn;
+            openContextMenu(e, [
+              { label: 'Open folder in browser', disabled: !link, onSelect: () => void api?.openExternalUrl(link) },
+              {
+                label: 'Copy folder link',
+                disabled: !link,
+                onSelect: () => void navigator.clipboard?.writeText(link).then(() => showToast('Đã sao chép link thư mục Drive.')),
+              },
+              { label: 'Check access', disabled: !link || !signedIn, onSelect: () => void shared.checkDriveLink() },
+              { label: 'Choose Drive folder…', disabled: !signedIn, onSelect: () => void shared.pickDriveFolder() },
+              {
+                label: 'Upload Drive 1 folder',
+                separatorBefore: true,
+                disabled: busy || !signedIn || !link || !drive1View,
+                onSelect: () => void handleUploadOnly(),
+              },
+              { label: signedIn ? 'Switch Google account' : 'Sign in to Google', separatorBefore: true, onSelect: shared.openDriveAuth },
+              {
+                label: 'Sign out',
+                disabled: !signedIn,
+                onSelect: () =>
+                  void api?.signOutGoogleDrive().then(() => {
+                    showToast('Đã đăng xuất Google Drive.');
+                    void shared.reloadSystem();
+                  }),
+              },
+            ]);
+          }}
         />
       </div>
 
@@ -1291,6 +1441,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
         onOpenReportPreview={() => setReportOpen(true)}
       />
 
+      <CloudDriveWarningModal warning={cloudWarning} onAccept={acceptCloudWarning} onChooseOther={chooseOtherThanCloud} />
       <ConflictModal prompt={conflictPrompt} onChoose={resolveConflictPrompt} />
       <NameDialog prompt={namePrompt} onClose={() => setNamePrompt(null)} />
       <PropertiesDialog path={propsPath} drives={shared.drives} onClose={() => setPropsPath(null)} />

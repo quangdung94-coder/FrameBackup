@@ -1,3 +1,5 @@
+import { ParallelRunModal, type ParallelChoice, type ParallelPrompt } from './components/ParallelRunModal';
+import { GlobalContextMenu } from './lib/globalMenu';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_VISIBLE_EXTENSIONS, FileFilterModal } from './components/FileFilterModal';
 import { GoogleDriveAuthModal } from './components/GoogleDriveAuthModal';
@@ -87,7 +89,6 @@ export default function App() {
     loadSavedJson(STORAGE_KEYS.visibleExts, isStringArray, () => [...DEFAULT_VISIBLE_EXTENSIONS])
   );
   const [includeSidecarXml, setIncludeSidecarXml] = useState<boolean>(() => loadSavedFlag(STORAGE_KEYS.includeSidecarXml, false));
-  const [sequentialRuns, setSequentialRuns] = useState<boolean>(() => loadSavedString(STORAGE_KEYS.sequentialRuns, 'false') === 'true');
 
   // ---- Nhiều thẻ: mỗi thẻ 1 tab ----
   const [tabs, setTabs] = useState<CardTab[]>(() => [{ id: newTabId(), camFolder: '' }]);
@@ -128,9 +129,8 @@ export default function App() {
       [STORAGE_KEYS.backupHistory]: historyItems.slice(0, 100),
       [STORAGE_KEYS.visibleExts]: visibleExtensions,
       [STORAGE_KEYS.includeSidecarXml]: includeSidecarXml,
-      [STORAGE_KEYS.sequentialRuns]: sequentialRuns,
     });
-  }, [drive1Root, drive2Root, copyEngine, packMode, uploadPack, postAction, postDelayMin, historyItems, visibleExtensions, includeSidecarXml, sequentialRuns]);
+  }, [drive1Root, drive2Root, copyEngine, packMode, uploadPack, postAction, postDelayMin, historyItems, visibleExtensions, includeSidecarXml]);
 
   const loadSystemData = useCallback(async () => {
     if (!window.frameBackup) return;
@@ -150,29 +150,112 @@ export default function App() {
     void loadSystemData();
   }, [loadSystemData]);
 
+  // ---- v1.4: tự nhận thẻ / ổ khi cắm hoặc rút ----
+  const [cardInserts, setCardInserts] = useState<Record<string, { path: string; seq: number }>>({});
+  const drivesRef = useLatestRef(drives);
+  const tabsRef = useLatestRef(tabs);
+  const activeTabRef = useLatestRef(activeTabId);
+  useEffect(() => {
+    const api = window.frameBackup;
+    if (!api?.onDrivesChanged) return;
+    let seq = 0;
+    return api.onDrivesChanged((next) => {
+      const prev = drivesRef.current;
+      const key = (d: DriveInfo) => d.mountPath.toLowerCase();
+      const before = new Set(prev.map(key));
+      const after = new Set(next.map(key));
+      setDrives(next);
+      const added = next.filter((d) => !before.has(key(d)));
+      const removed = prev.filter((d) => !after.has(key(d)));
+      for (const d of removed) showToast(`⏏ ${d.isRemovable ? 'Thẻ' : 'Ổ'} ${d.label} đã được rút ra.`);
+      for (const d of added) {
+        if (!d.isRemovable) {
+          showToast(`🖴 Đã nhận ổ ${d.label}.`);
+          continue;
+        }
+        // Thẻ mới: mở vào khu vực thẻ đang xem nếu còn trống, không thì khu vực trống đầu tiên
+        const sts = statusesRef.current;
+        const free = (id: string) => !sts[id]?.cardPath;
+        const list = tabsRef.current;
+        const target = free(activeTabRef.current) ? activeTabRef.current : list.find((t) => free(t.id))?.id;
+        if (target) {
+          seq += 1;
+          setCardInserts((m) => ({ ...m, [target]: { path: d.mountPath, seq } }));
+          const name = list.find((t) => t.id === target)?.camFolder;
+          showToast(`💳 Đã nhận thẻ ${d.label} — đã mở ở ${name ? `thẻ ${name}` : 'khu vực thẻ'}.`);
+        } else {
+          showToast(`💳 Đã nhận thẻ ${d.label} — bấm "+ Thêm thẻ" để mở thẻ này.`);
+        }
+      }
+    });
+  }, [drivesRef, tabsRef, activeTabRef, statusesRef, showToast]);
+
   const driveLinkRef = useLatestRef(driveLink);
   /** `silent`: tự kiểm tra (dán link / sau khi up) — chỉ đổi trạng thái ở Cột 4, không bật thông báo. */
   const checkDriveLink = useCallback(
-    async (linkOverride?: string, silent = false) => {
-      if (!window.frameBackup) return;
+    async (linkOverride?: string, silent = false): Promise<DriveFolderCheckResult | null> => {
+      if (!window.frameBackup) return null;
       const target = (linkOverride ?? driveLinkRef.current).trim();
       if (!target) {
         if (!silent) showToast('Hãy dán link thư mục Google Drive trước khi kiểm tra.');
-        return;
+        return null;
       }
       setCheckingDriveLink(true);
       try {
         const res = await window.frameBackup.checkDriveFolder(target);
         setDriveFolderCheck(res);
-        if (silent) return;
+        if (silent) return res;
         if (res.ok) showToast(`✅ Kết nối thư mục Drive "${res.folderName}" — Quyền Editor OK!`);
         else if (res.error) showToast(`⚠️ ${res.error}`);
+        return res;
       } finally {
         setCheckingDriveLink(false);
       }
     },
     [driveLinkRef, showToast]
   );
+
+  // ---- v1.4: chọn / cấp quyền thư mục Drive bằng Google Picker (quyền drive.file) ----
+  const [pickingDriveFolder, setPickingDriveFolder] = useState(false);
+  const pickDriveFolder = useCallback(async () => {
+    const api = window.frameBackup;
+    if (!api?.pickDriveFolder) return;
+    setPickingDriveFolder(true);
+    try {
+      const startId = parseGoogleDriveFolderId(driveLinkRef.current) ?? undefined;
+      const res = await api.pickDriveFolder(startId, loadSavedString(STORAGE_KEYS.loginBrowser, 'system'));
+      if (!res.ok || !res.folderId) {
+        if (!res.cancelled && res.error) showToast(`⚠️ ${res.error}`);
+        return;
+      }
+      const link = `https://drive.google.com/drive/folders/${res.folderId}`;
+      setDriveLinkState(link);
+      setDriveFolderCheck(null);
+      showToast(`✅ Đã cấp quyền thư mục Drive "${res.folderName ?? res.folderId}".`);
+      await checkDriveLink(link, true);
+    } finally {
+      setPickingDriveFolder(false);
+    }
+  }, [driveLinkRef, checkDriveLink, showToast]);
+
+  // ---- v1.4: 1 nút "Check" — kiểm tra; app chưa có quyền ghi thì tự mở bảng chọn thư mục của Google ----
+  const checkDriveAccess = useCallback(async () => {
+    const link = driveLinkRef.current.trim();
+    if (!link) {
+      if (driveAuth.signedIn) await pickDriveFolder();
+      else showToast('Hãy đăng nhập Google và dán link thư mục Drive trước.');
+      return;
+    }
+    const res = await checkDriveLink(link, true);
+    if (!res) return;
+    if (res.ok) showToast(`✅ Kết nối thư mục Drive "${res.folderName}" — Quyền Editor OK!`);
+    else if (res.needsPick && driveAuth.signedIn) {
+      showToast('🔑 App chưa có quyền ghi vào thư mục này — đang mở bảng chọn của Google, anh bấm "Chọn" 1 lần.');
+      await pickDriveFolder();
+    } else if (res.error) showToast(`⚠️ ${res.error}`);
+  }, [driveLinkRef, driveAuth, checkDriveLink, pickDriveFolder, showToast]);
+
+
 
   // Đã đăng nhập + dán link hợp lệ => tự kiểm tra thư mục
   const parsedDriveFolderId = useMemo(() => parseGoogleDriveFolderId(driveLink), [driveLink]);
@@ -182,19 +265,73 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [driveAuth.signedIn, parsedDriveFolderId, checkDriveLink, driveLinkRef]);
 
-  // ---- Chạy lần lượt (tuỳ chọn) ----
-  const sequentialRef = useLatestRef(sequentialRuns);
-  const slotChainRef = useRef<Promise<void>>(Promise.resolve());
-  const acquireRunSlot = useCallback(async () => {
-    if (!sequentialRef.current) return () => {};
-    const prev = slotChainRef.current;
-    let release: () => void = () => {};
-    slotChainRef.current = new Promise<void>((r) => {
-      release = r;
-    });
-    await prev;
-    return release;
-  }, [sequentialRef]);
+  // ---- Chạy nhiều thẻ: song song / xếp hàng / hỏi (v1.4) ----
+  const activeRunsRef = useRef<Set<Promise<void>>>(new Set());
+  const [parallelChoice, setParallelChoiceState] = useState<'ask' | 'parallel' | 'queue'>(() => {
+    const v = loadSavedString(STORAGE_KEYS.parallelChoice, '');
+    if (v === 'parallel' || v === 'queue' || v === 'ask') return v;
+    // Người dùng cũ đã bật "Chạy lần lượt từng thẻ" => giữ nguyên là xếp hàng
+    return loadSavedString(STORAGE_KEYS.sequentialRuns, 'false') === 'true' ? 'queue' : 'ask';
+  });
+  const parallelChoiceRef = useLatestRef(parallelChoice);
+  const drive1RootRef = useLatestRef(drive1Root);
+  const setParallelChoice = useCallback((v: 'ask' | 'parallel' | 'queue') => {
+    setParallelChoiceState(v);
+    saveToStorage({ [STORAGE_KEYS.parallelChoice]: v });
+  }, []);
+  const [parallelPrompts, setParallelPrompts] = useState<ParallelPrompt[]>([]);
+  const askParallel = useCallback(
+    (tabLabel: string, others: string[], sharedDrive: string) =>
+      new Promise<ParallelChoice>((resolve) => {
+        const prompt: ParallelPrompt = {
+          tabLabel,
+          others,
+          sharedDrive,
+          resolve: (choice, remember) => {
+            if (remember && choice !== 'cancel') setParallelChoice(choice);
+            setParallelPrompts((q) => q.filter((x) => x !== prompt));
+            resolve(choice);
+          },
+        };
+        setParallelPrompts((q) => [...q, prompt]);
+      }),
+    [setParallelChoice]
+  );
+
+  /** Xin lượt chạy cho 1 thẻ. Trả null nếu anh bấm Hủy. */
+  const acquireRunSlot = useCallback(
+    async (tabId: string): Promise<(() => void) | null> => {
+      const others = Array.from(activeRunsRef.current);
+      let release: () => void = () => {};
+      const mine = new Promise<void>((r) => {
+        release = () => {
+          activeRunsRef.current.delete(mine);
+          r();
+        };
+      });
+      if (others.length > 0) {
+        let choice: ParallelChoice;
+        if (parallelChoiceRef.current === 'parallel') choice = 'parallel';
+        else if (parallelChoiceRef.current === 'queue') choice = 'queue';
+        else {
+          const sts = statusesRef.current;
+          const names = Object.entries(sts)
+            .filter(([id, st]) => id !== tabId && st && (st.running || st.waiting))
+            .map(([, st]) => st!.label || 'Thẻ khác');
+          const label = sts[tabId]?.label || 'thẻ này';
+          const d1 = drive1RootRef.current.match(/^[A-Za-z]:/)?.[0] ?? (drive1RootRef.current.startsWith('/Volumes/') ? drive1RootRef.current.split('/').slice(0, 3).join('/') : '');
+          choice = await askParallel(label, names.length > 0 ? names : ['thẻ khác'], d1);
+        }
+        if (choice === 'cancel') return null;
+        activeRunsRef.current.add(mine);
+        if (choice === 'queue') await Promise.all(others);
+        return release;
+      }
+      activeRunsRef.current.add(mine);
+      return release;
+    },
+    [parallelChoiceRef, statusesRef, askParallel]
+  );
 
   // ---- Xong 1 thẻ: lịch sử + Sleep/Shutdown khi KHÔNG còn thẻ nào chạy ----
   const postActionRef = useLatestRef(postAction);
@@ -247,6 +384,9 @@ export default function App() {
     driveFolderCheck,
     checkingDriveLink,
     checkDriveLink,
+    pickDriveFolder,
+    checkDriveAccess,
+    pickingDriveFolder,
     openDriveAuth: () => setDriveAuthModalOpen(true),
     uploadPack,
     setUploadPack,
@@ -257,6 +397,8 @@ export default function App() {
     setTargetDate,
     finishJob,
     acquireRunSlot,
+    parallelChoice,
+    setParallelChoice,
     verifiedCardRoots: verifiedCardRootsRef.current,
   };
 
@@ -338,8 +480,8 @@ export default function App() {
         activeId={activeTabId}
         statuses={statuses}
         stores={storesRef.current}
-        sequential={sequentialRuns}
-        onSequentialChange={setSequentialRuns}
+        parallelChoice={parallelChoice}
+        onParallelChoiceChange={setParallelChoice}
         onSelect={setActiveTabId}
         onAdd={addTab}
         onClose={closeTab}
@@ -354,6 +496,7 @@ export default function App() {
           shared={shared}
           progress={storesRef.current[t.id]}
           initialSource={initialSources[t.id]}
+          cardInsert={cardInserts[t.id]}
           onCamFolderChange={(value) => setTabs((prev) => prev.map((x) => (x.id === t.id ? { ...x, camFolder: value } : x)))}
           onStatus={handleStatus}
         />
@@ -387,6 +530,8 @@ export default function App() {
       />
 
       <NotificationTray toasts={toasts} onDismiss={dismissToast} />
+      <GlobalContextMenu />
+      <ParallelRunModal prompt={parallelPrompts[0] ?? null} />
 
       <PowerCountdownModal
         action={pendingPowerAction}

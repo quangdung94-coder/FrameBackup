@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createIpcContext, registerIpcHandlers, shutdownBackgroundJobs } from './ipc';
 import { initGoogleDriveStorage } from './services/googleDriveService';
 import { flushShotDateCache, initShotDateCache } from './services/shotDateCache';
+import { stopDriveWatcher } from './services/driveWatcher';
 import { initVerifyLedger } from './services/verifyLedger';
 
 let mainWindow: BrowserWindow | null = null;
@@ -45,13 +46,13 @@ function createWindow() {
     if (!params.isEditable) return;
     const f = params.editFlags;
     Menu.buildFromTemplate([
-      { label: 'Hoàn tác', role: 'undo', enabled: f.canUndo },
+      { label: 'Undo', role: 'undo', enabled: f.canUndo },
       { type: 'separator' },
-      { label: 'Cắt', role: 'cut', enabled: f.canCut },
-      { label: 'Sao chép', role: 'copy', enabled: f.canCopy },
-      { label: 'Dán', role: 'paste', enabled: f.canPaste },
+      { label: 'Cut', role: 'cut', enabled: f.canCut },
+      { label: 'Copy', role: 'copy', enabled: f.canCopy },
+      { label: 'Paste', role: 'paste', enabled: f.canPaste },
       { type: 'separator' },
-      { label: 'Chọn hết', role: 'selectAll', enabled: f.canSelectAll },
+      { label: 'Select all', role: 'selectAll', enabled: f.canSelectAll },
     ]).popup({ window: mainWindow ?? undefined });
   });
 
@@ -97,6 +98,7 @@ if (!gotSingleInstanceLock) {
 }
 
 app.on('window-all-closed', async () => {
+  stopDriveWatcher();
   flushShotDateCache();
   await shutdownBackgroundJobs();
   if (process.platform !== 'darwin') {
