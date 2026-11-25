@@ -15,6 +15,14 @@ on:
         description: 'Optional release tag to attach installer (e.g. v1.4.0)'
         type: string
         required: false
+      mac_runner:
+        description: 'macOS runner pool (macos-15-intel still builds native arm64 .dmg)'
+        type: choice
+        default: macos-15-intel
+        options:
+          - macos-15-intel
+          - macos-latest
+          - macos-15
   push:
     tags:
       - 'v*'
@@ -29,6 +37,7 @@ jobs:
     uses: ./.github/workflows/_build-platform.yml
     secrets: inherit
     with:
+      os_key: win
       os_label: Windows (.exe)
       runner: windows-latest
       build_cmd: npm run dist:win
@@ -42,8 +51,9 @@ jobs:
     uses: ./.github/workflows/_build-platform.yml
     secrets: inherit
     with:
+      os_key: mac
       os_label: macOS Apple Silicon (.dmg)
-      runner: macos-latest
+      runner: ${{ inputs.mac_runner || 'macos-15-intel' }}
       build_cmd: npm run dist:mac
       artifact_name: FrameBackup-macOS-arm64
       artifact_path: release/*.dmg

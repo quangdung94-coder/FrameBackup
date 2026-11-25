@@ -3,6 +3,9 @@ name: Build Platform (Reusable)
 on:
   workflow_call:
     inputs:
+      os_key:
+        required: true
+        type: string
       os_label:
         required: true
         type: string
@@ -61,6 +64,14 @@ jobs:
           else
             echo "::warning::GOOGLE_OAUTH_CLIENT_JSON secret is empty."
           fi
+
+      - name: Ensure arm64 ffmpeg-static binary for macOS
+        if: inputs.os_key == 'mac'
+        shell: bash
+        run: |
+          rm -f node_modules/ffmpeg-static/ffmpeg
+          npm_config_platform=darwin npm_config_arch=arm64 node node_modules/ffmpeg-static/install.js
+          file node_modules/ffmpeg-static/ffmpeg
 
       - name: Build & Package Installer
         run: ${{ inputs.build_cmd }}
