@@ -3,9 +3,6 @@ name: Build Platform (Reusable)
 on:
   workflow_call:
     inputs:
-      os_key:
-        required: true
-        type: string
       os_label:
         required: true
         type: string
@@ -66,7 +63,7 @@ jobs:
           fi
 
       - name: Ensure arm64 ffmpeg-static binary for macOS
-        if: inputs.os_key == 'mac'
+        if: startsWith(inputs.runner, 'macos')
         shell: bash
         run: |
           rm -f node_modules/ffmpeg-static/ffmpeg
