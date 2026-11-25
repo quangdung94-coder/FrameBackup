@@ -34,14 +34,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Ensure executable permissions for macOS bundled binaries
+        if: startsWith(inputs.runner, 'macos')
+        shell: bash
+        run: chmod +x node_modules/7zip-bin/mac/*/7za || true
 
       - name: Typecheck
         run: npm run typecheck

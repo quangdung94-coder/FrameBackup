@@ -45,6 +45,7 @@ describe('packagingService', () => {
       { projectName: 'TestSmart', sourceDir: src, packMode: 'video-raw-smart' },
       () => {}
     );
+    expect(res.error).toBeUndefined();
     expect(res.success).toBe(true);
     expect(res.archivePaths).toHaveLength(1);
     expect(res.archivePaths[0]).toMatch(/_Photos_Store\.zip$/);
@@ -66,6 +67,7 @@ describe('packagingService', () => {
       { projectName: 'TestSubset', sourceDir: src, packMode: 'zip-store', selectedFilePaths: [f1] },
       () => {}
     );
+    expect(res.error).toBeUndefined();
     expect(res.success).toBe(true);
     expect(res.sourceFiles).toBe(1);
     expect(res.archivePaths).toHaveLength(1);
