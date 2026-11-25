@@ -1,29 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, shell } from 'electron';
-import os from 'node:os';
-import fs from 'node:fs/promises';
+import { app, BrowserWindow, Menu } from 'electron';
 import path from 'node:path';
-import { detectCopyEngines } from './services/copyEngineService';
-import { cancelActiveCopy, runCopyAndVerify, type CopyVerifyRequest } from './services/copyVerifyService';
-import { listDirectoryEntries, listSystemDrives, scanFilesRecursive } from './services/diskService';
-import { safeEjectDrive } from './services/ejectService';
-import {
-  cancelDriveUpload,
-  checkDriveFolderAccess,
-  getDriveAuthStatus,
-  importOAuthCredentials,
-  initGoogleDriveStorage,
-  signInGoogleDrive,
-  signOutGoogleDrive,
-  uploadProjectToDrive,
-  type DriveUploadRequest,
-} from './services/googleDriveService';
-import { inspectAndBuildReport, type InspectReportRequest } from './services/mediaInspectorService';
-import { cancelPackaging, packageForDrive, type PackageRequest } from './services/packagingService';
-import { executePowerAction, type PowerActionType } from './services/powerService';
-import { folderWatcher } from './services/watchService';
+import { createIpcContext, registerIpcHandlers, shutdownBackgroundJobs } from './ipc';
+import { initGoogleDriveStorage } from './services/googleDriveService';
+import { flushShotDateCache, initShotDateCache } from './services/shotDateCache';
+import { initVerifyLedger } from './services/verifyLedger';
 
 let mainWindow: BrowserWindow | null = null;
-let powerSaveId: number | null = null;
 
 function createWindow() {
   const iconPath = path.join(__dirname, '../build', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
@@ -58,137 +40,23 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  // Chuột phải vào ô nhập chữ (link Drive, tên Show, đường dẫn...): Cắt / Sao chép / Dán / Chọn hết
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable) return;
+    const f = params.editFlags;
+    Menu.buildFromTemplate([
+      { label: 'Hoàn tác', role: 'undo', enabled: f.canUndo },
+      { type: 'separator' },
+      { label: 'Cắt', role: 'cut', enabled: f.canCut },
+      { label: 'Sao chép', role: 'copy', enabled: f.canCopy },
+      { label: 'Dán', role: 'paste', enabled: f.canPaste },
+      { type: 'separator' },
+      { label: 'Chọn hết', role: 'selectAll', enabled: f.canSelectAll },
+    ]).popup({ window: mainWindow ?? undefined });
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
-  });
-}
-
-function safeSend(channel: string, payload: unknown) {
-  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.send(channel, payload);
-  }
-}
-
-function registerIpcHandlers() {
-  ipcMain.handle('system:getInfo', () => ({
-    platform: process.platform,
-    arch: process.arch,
-    hostname: os.hostname(),
-    preventSleepActive: powerSaveId !== null && powerSaveBlocker.isStarted(powerSaveId),
-  }));
-
-  ipcMain.handle('system:setPreventSleep', (_event, enabled: boolean) => {
-    if (enabled) {
-      if (powerSaveId === null || !powerSaveBlocker.isStarted(powerSaveId)) {
-        powerSaveId = powerSaveBlocker.start('prevent-app-suspension');
-      }
-      return true;
-    }
-    if (powerSaveId !== null && powerSaveBlocker.isStarted(powerSaveId)) {
-      powerSaveBlocker.stop(powerSaveId);
-    }
-    powerSaveId = null;
-    return false;
-  });
-
-  ipcMain.handle('disk:listDrives', async () => listSystemDrives());
-  ipcMain.handle('disk:listDirectory', async (_event, dirPath: string) => listDirectoryEntries(dirPath, true));
-  ipcMain.handle('disk:scanRecursive', async (_event, dirPath: string) => scanFilesRecursive(dirPath, true));
-  ipcMain.handle('disk:ensureDir', async (_event, dirPath: string) => {
-    await fs.mkdir(dirPath, { recursive: true });
-    return dirPath;
-  });
-  ipcMain.handle('disk:safeEject', async (_event, mountPath: string) => safeEjectDrive(mountPath));
-
-  ipcMain.handle('dialog:pickDirectory', async (_event, title?: string) => {
-    if (!mainWindow) return null;
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: title || 'Chọn thư mục',
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    return result.filePaths[0];
-  });
-
-  ipcMain.handle('system:openExternal', async (_event, url: string) => {
-    if (url.startsWith('https://') || url.startsWith('http://')) {
-      await shell.openExternal(url);
-    }
-  });
-
-  // Phase 2: Copy & Verify + External Engines
-  ipcMain.handle('copy:listEngines', async () => detectCopyEngines());
-  ipcMain.handle('copy:start', async (_event, req: CopyVerifyRequest) => {
-    return runCopyAndVerify(req, (progress) => safeSend('copy:progress', progress));
-  });
-
-  ipcMain.handle('copy:cancel', () => cancelActiveCopy());
-
-  // Phase 2: Watch Mode
-  ipcMain.handle('watch:start', async (_event, dirPath: string, debounceSec: number) => {
-    await folderWatcher.start(dirPath, debounceSec, (status) => safeSend('watch:status', status));
-  });
-
-  ipcMain.handle('watch:stop', async () => {
-    await folderWatcher.stop();
-  });
-
-  ipcMain.handle('watch:triggerNow', async () => {
-    await folderWatcher.triggerNow();
-  });
-
-  // Phase 3: Media Inspector & Packaging
-  ipcMain.handle('media:inspectAndReport', async (_event, req: InspectReportRequest) => {
-    return inspectAndBuildReport(req);
-  });
-
-  ipcMain.handle('package:start', async (_event, req: PackageRequest) => {
-    return packageForDrive(req, (progress) => safeSend('package:progress', progress));
-  });
-
-  ipcMain.handle('package:cancel', () => cancelPackaging());
-
-  // Phase 4: Google Drive OAuth, Folder Check & Resumable Upload
-  ipcMain.handle('drive:getAuthStatus', async () => getDriveAuthStatus());
-
-  ipcMain.handle('drive:importCredentials', async () => {
-    if (!mainWindow) return { ok: false, message: 'Cửa sổ chính chưa sẵn sàng.' };
-    const picked = await dialog.showOpenDialog(mainWindow, {
-      title: 'Chọn file Google OAuth credentials.json',
-      filters: [{ name: 'JSON Files', extensions: ['json'] }],
-      properties: ['openFile'],
-    });
-    if (picked.canceled || picked.filePaths.length === 0) {
-      return { ok: false, message: 'Đã hủy chọn file.' };
-    }
-    return importOAuthCredentials(picked.filePaths[0]);
-  });
-
-  ipcMain.handle('drive:signIn', async () => {
-    return signInGoogleDrive(async (url) => {
-      await shell.openExternal(url);
-    });
-  });
-
-  ipcMain.handle('drive:signOut', async () => signOutGoogleDrive());
-
-  ipcMain.handle('drive:checkFolder', async (_event, urlOrId: string) => {
-    return checkDriveFolderAccess(urlOrId);
-  });
-
-  ipcMain.handle('drive:upload', async (_event, req: DriveUploadRequest) => {
-    return uploadProjectToDrive(req, (progress) => safeSend('drive:uploadProgress', progress));
-  });
-
-  ipcMain.handle('drive:cancelUpload', () => cancelDriveUpload());
-
-  // Phase 5: Power Management (Sleep / Shutdown)
-  ipcMain.handle('system:powerAction', async (_event, action: PowerActionType) => {
-    if (powerSaveId !== null && powerSaveBlocker.isStarted(powerSaveId)) {
-      powerSaveBlocker.stop(powerSaveId);
-      powerSaveId = null;
-    }
-    return executePowerAction(action);
   });
 }
 
@@ -207,8 +75,13 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
-    initGoogleDriveStorage(app.getPath('userData'));
-    registerIpcHandlers();
+    initVerifyLedger(app.getPath('userData'));
+    initShotDateCache(app.getPath('userData'));
+    initGoogleDriveStorage(app.getPath('userData'), [
+      process.resourcesPath, // bản đã đóng gói: resources/google-oauth-client.json
+      path.join(app.getAppPath(), 'build'), // npm run dev: build/google-oauth-client.json
+    ]);
+    registerIpcHandlers(createIpcContext(() => mainWindow));
     createWindow();
 
     app.on('activate', () => {
@@ -224,13 +97,8 @@ if (!gotSingleInstanceLock) {
 }
 
 app.on('window-all-closed', async () => {
-  await folderWatcher.stop();
-  cancelActiveCopy();
-  cancelPackaging();
-  cancelDriveUpload();
-  if (powerSaveId !== null && powerSaveBlocker.isStarted(powerSaveId)) {
-    powerSaveBlocker.stop(powerSaveId);
-  }
+  flushShotDateCache();
+  await shutdownBackgroundJobs();
   if (process.platform !== 'darwin') {
     app.quit();
   }

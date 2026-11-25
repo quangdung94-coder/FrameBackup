@@ -1,10 +1,6 @@
 import { Eye, Square, Terminal } from 'lucide-react';
-import type {
-  CopyProgressEvent,
-  DriveUploadProgressEvent,
-  PackageProgressEvent,
-  WatchStatusEvent,
-} from '../types/framebackup';
+import { useProgress, type ProgressStore } from '../lib/progressStore';
+import type { CopyProgressEvent, DriveUploadProgressEvent, PackageProgressEvent } from '../types/framebackup';
 
 export interface ActivityLogEntry {
   id: number;
@@ -16,11 +12,7 @@ export interface ActivityLogEntry {
 interface PipelineBarProps {
   projectName: string;
   heightPx: number;
-  step1Progress: CopyProgressEvent | null;
-  step2Progress: CopyProgressEvent | null;
-  step3Progress: PackageProgressEvent | null;
-  step4Progress: DriveUploadProgressEvent | null;
-  watchStatus: WatchStatusEvent | null;
+  progress: ProgressStore;
   activityLogs: ActivityLogEntry[];
   isRunning: boolean;
   onCancel: () => void;
@@ -72,17 +64,15 @@ function getDriveLabel(p: DriveUploadProgressEvent | null) {
 export function PipelineBar({
   projectName,
   heightPx,
-  step1Progress,
-  step2Progress,
-  step3Progress,
-  step4Progress,
-  watchStatus,
+  progress,
   activityLogs,
   isRunning,
   onCancel,
   onOpenReportPreview,
 }: PipelineBarProps) {
   const showLogPane = heightPx >= 235;
+  const { step1: step1Progress, step2: step2Progress, step3: step3Progress, step4: step4Progress, watch: watchStatus } =
+    useProgress(progress);
 
   return (
     <div
@@ -139,10 +129,10 @@ export function PipelineBar({
           </div>
           <div className="h-2.5 bg-[#272732] rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-200 ${
+              className={`h-full origin-left transition-transform duration-200 ease-out will-change-transform ${
                 step1Progress?.status === 'completed' ? 'bg-emerald-500' : 'bg-blue-500'
               }`}
-              style={{ width: `${step1Progress?.percent ?? 0}%` }}
+              style={{ transform: `scaleX(${(step1Progress?.percent ?? 0) / 100})` }}
             />
           </div>
           <div className="flex items-center justify-between text-xs text-zinc-400 gap-2">
@@ -175,8 +165,8 @@ export function PipelineBar({
           </div>
           <div className="h-2.5 bg-[#272732] rounded-full overflow-hidden">
             <div
-              className="h-full bg-emerald-500 rounded-full transition-all duration-200"
-              style={{ width: `${step2Progress?.percent ?? 0}%` }}
+              className="h-full bg-emerald-500 origin-left transition-transform duration-200 ease-out will-change-transform"
+              style={{ transform: `scaleX(${(step2Progress?.percent ?? 0) / 100})` }}
             />
           </div>
           <div className="flex items-center justify-between text-xs text-zinc-400 gap-2">
@@ -209,10 +199,10 @@ export function PipelineBar({
           </div>
           <div className="h-2.5 bg-[#272732] rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-200 ${
+              className={`h-full origin-left transition-transform duration-200 ease-out will-change-transform ${
                 step3Progress?.status === 'completed' ? 'bg-emerald-500' : 'bg-amber-500'
               }`}
-              style={{ width: `${step3Progress?.percent ?? 0}%` }}
+              style={{ transform: `scaleX(${(step3Progress?.percent ?? 0) / 100})` }}
             />
           </div>
           <div className="text-xs text-zinc-400 truncate">
@@ -238,10 +228,10 @@ export function PipelineBar({
           </div>
           <div className="h-2.5 bg-[#272732] rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-200 ${
+              className={`h-full origin-left transition-transform duration-200 ease-out will-change-transform ${
                 step4Progress?.status === 'completed' ? 'bg-emerald-500' : 'bg-purple-500'
               }`}
-              style={{ width: `${step4Progress?.percent ?? 0}%` }}
+              style={{ transform: `scaleX(${(step4Progress?.percent ?? 0) / 100})` }}
             />
           </div>
           <div className="flex items-center justify-between text-xs text-zinc-400 gap-2">

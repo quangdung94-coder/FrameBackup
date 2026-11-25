@@ -1,88 +1,68 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { path7za as path7zaRaw } from '7zip-bin';
-import { scanFilesRecursive } from './diskService';
+import { resolveUnpackedBinary } from '../lib/binaries';
+import { errorMessage, isCancelledMessage } from '../lib/errors';
+import { createJobPool } from '../lib/jobSlot';
+import { runAbortableProcess } from '../lib/process';
+import { osStagingDir, unlinkQuietly, writeTempListFile } from '../lib/tempFiles';
+import { toSafeAsciiName } from '../shared/paths';
+import type { PackageProgressEvent, PackageRequest, PackageResult } from '../shared/types';
+import { listSystemDrives, scanFilesRecursive } from './diskService';
 
-const path7za = path7zaRaw.replace('app.asar', 'app.asar.unpacked');
+export type { PackMode, PackageProgressEvent, PackageRequest, PackageResult } from '../shared/types';
 
-export type PackMode = 'video-raw-smart' | 'none' | 'zip-store' | '7z';
+const path7za = resolveUnpackedBinary(path7zaRaw);
+const packJob = createJobPool();
 
-export interface PackageRequest {
-  projectName: string;
-  sourceDir: string;
-  packMode: PackMode;
+export function cancelPackaging(jobId?: string): boolean {
+  return packJob.cancel(jobId);
 }
 
-export interface PackageProgressEvent {
-  status: 'scanning' | 'packing' | 'completed' | 'cancelled' | 'error';
-  percent: number;
-  message: string;
-}
-
-export interface PackageResult {
-  success: boolean;
-  packMode: PackMode;
-  archivePaths: string[];
-  looseFilePaths: string[];
-  totalOutputBytes: number;
-  error?: string;
-}
-
-let activePackAbort: AbortController | null = null;
-
-export function cancelPackaging(): boolean {
-  if (activePackAbort) {
-    activePackAbort.abort();
-    activePackAbort = null;
-    return true;
-  }
-  return false;
-}
-
-async function run7za(
-  args: string[],
-  cwd: string,
-  signal: AbortSignal,
-  onPercent: (pct: number) => void
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const child: ChildProcess = spawn(path7za, args, { cwd, windowsHide: true });
-
-    const onAbort = () => {
-      child.kill();
-      reject(new Error('CANCELLED'));
-    };
-    if (signal.aborted) return onAbort();
-    signal.addEventListener('abort', onAbort, { once: true });
-
-    const parseProgress = (chunk: Buffer | string) => {
-      const text = chunk.toString();
-      const matches = text.match(/(\d{1,3})%/g);
+/** Chạy 7za, đọc % từ output (-bsp1) và báo về onPercent (tối đa 99). */
+function run7za(args: string[], cwd: string, signal: AbortSignal, onPercent: (pct: number) => void): Promise<void> {
+  return runAbortableProcess(path7za, {
+    args,
+    cwd,
+    signal,
+    windowsHide: true,
+    onOutput: (chunk) => {
+      const matches = chunk.toString().match(/(\d{1,3})%/g);
       if (matches && matches.length > 0) {
         const last = parseInt(matches[matches.length - 1], 10);
         if (!Number.isNaN(last)) onPercent(Math.min(99, last));
       }
-    };
-
-    child.stdout?.on('data', parseProgress);
-    child.stderr?.on('data', parseProgress);
-
-    child.on('error', (err) => {
-      signal.removeEventListener('abort', onAbort);
-      reject(err);
-    });
-
-    child.on('close', (code) => {
-      signal.removeEventListener('abort', onAbort);
-      if (code === 0) resolve();
-      else reject(new Error(`7za kết thúc với mã lỗi ${code}`));
-    });
+    },
+    formatExitError: (code) => `7za kết thúc với mã lỗi ${code}`,
   });
 }
 
+/** Nguồn có nằm trên thẻ nhớ / ổ rời không (khi đó KHÔNG ghi file tạm lên thẻ). */
+async function isOnRemovableDrive(dir: string): Promise<boolean> {
+  try {
+    const drives = await listSystemDrives();
+    const resolved = path.resolve(dir).toLowerCase();
+    return drives.some((d) => {
+      if (!d.isRemovable || !d.mountPath) return false;
+      const mount = path.resolve(d.mountPath).toLowerCase();
+      return resolved === mount || resolved.startsWith(mount.endsWith(path.sep) ? mount : mount + path.sep);
+    });
+  } catch {
+    return false;
+  }
+}
+
+/** Kiểm tra file nén sau khi tạo (7za t) — hỏng là dừng, không upload file nén lỗi lên Drive. */
+async function testArchive(archivePath: string, cwd: string, signal: AbortSignal, onPercent: (pct: number) => void) {
+  await run7za(['t', '-bsp1', archivePath], cwd, signal, onPercent);
+}
+
 async function resolveSafePackStagingDir(sourceDir: string, safeProj: string): Promise<string> {
+  if (await isOnRemovableDrive(sourceDir)) {
+    const tmp = osStagingDir(safeProj);
+    await fsp.mkdir(tmp, { recursive: true });
+    return tmp;
+  }
   // Prefer placing large .zip/.7z staging archives on the SAME drive as sourceDir (Drive 1)
   // as a sibling folder so we never fill up a small C:\ OS drive with 100GB temp archives!
   const resolvedSource = path.resolve(sourceDir);
@@ -96,7 +76,7 @@ async function resolveSafePackStagingDir(sourceDir: string, safeProj: string): P
       // Fallback to OS temp dir if parent directory is read-only
     }
   }
-  const fallback = path.join(os.tmpdir(), 'framebackup_staging', safeProj);
+  const fallback = osStagingDir(safeProj);
   await fsp.mkdir(fallback, { recursive: true });
   return fallback;
 }
@@ -105,12 +85,10 @@ export async function packageForDrive(
   req: PackageRequest,
   onProgress: (ev: PackageProgressEvent) => void
 ): Promise<PackageResult> {
-  if (activePackAbort) activePackAbort.abort();
-  const controller = new AbortController();
-  activePackAbort = controller;
-  const { signal } = controller;
+  const jobController = packJob.begin(req.jobId);
+  const { signal } = jobController;
 
-  const safeProj = req.projectName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'FrameBackup_Show';
+  const safeProj = toSafeAsciiName(req.projectName);
   const stagingDir = await resolveSafePackStagingDir(req.sourceDir, safeProj);
 
   let tempListFile: string | null = null;
@@ -119,13 +97,15 @@ export async function packageForDrive(
   try {
     onProgress({ status: 'scanning', percent: 5, message: 'Đang phân loại Video / Ảnh để đóng gói...' });
     const allFiles = await scanFilesRecursive(req.sourceDir, false);
+    const sourceInfo = { sourceFiles: allFiles.length, sourceBytes: allFiles.reduce((s, f) => s + f.sizeBytes, 0) };
 
     if (req.packMode === 'none') {
       const totalBytes = allFiles.reduce((s, f) => s + f.sizeBytes, 0);
       onProgress({ status: 'completed', percent: 100, message: 'Không nén — Up nguyên cấu trúc thư mục' });
-      activePackAbort = null;
+      packJob.release(req.jobId, jobController);
       return {
         success: true,
+        ...sourceInfo,
         packMode: 'none',
         archivePaths: [],
         looseFilePaths: allFiles.map((f) => f.fullPath),
@@ -141,12 +121,10 @@ export async function packageForDrive(
       if (photoOrRaw.length > 0) {
         const archivePath = path.join(stagingDir, `${safeProj}_Photos_Store.zip`);
         currentArchivePath = archivePath;
-        await fsp.unlink(archivePath).catch(() => {});
-        tempListFile = path.join(os.tmpdir(), `fb_pack_${Date.now()}.txt`);
-        await fsp.writeFile(
-          tempListFile,
-          photoOrRaw.map((f) => f.relativePath).join('\n'),
-          'utf8'
+        await unlinkQuietly(archivePath);
+        tempListFile = await writeTempListFile(
+          'fb_pack',
+          photoOrRaw.map((f) => f.relativePath)
         );
 
         onProgress({
@@ -162,6 +140,8 @@ export async function packageForDrive(
             message: `Đang đóng gói ${photoOrRaw.length} ảnh (Zip Store): ${pct}%`,
           });
         });
+        onProgress({ status: 'packing', percent: 99, message: 'Đang kiểm tra file Zip vừa tạo (7za t)...' });
+        await testArchive(archivePath, req.sourceDir, signal, () => {});
         archivePaths.push(archivePath);
       }
 
@@ -180,9 +160,10 @@ export async function packageForDrive(
             : `Xong: ${otherFiles.length} Video lẻ (không có ảnh cần gom)`,
       });
 
-      activePackAbort = null;
+      packJob.release(req.jobId, jobController);
       return {
         success: true,
+        ...sourceInfo,
         packMode: 'video-raw-smart',
         archivePaths,
         looseFilePaths: otherFiles.map((f) => f.fullPath),
@@ -194,7 +175,7 @@ export async function packageForDrive(
     const is7z = req.packMode === '7z';
     const archivePath = path.join(stagingDir, is7z ? `${safeProj}.7z` : `${safeProj}_Store.zip`);
     currentArchivePath = archivePath;
-    await fsp.unlink(archivePath).catch(() => {});
+    await unlinkQuietly(archivePath);
 
     const args = is7z
       ? ['a', '-t7z', '-mx=5', '-bsp1', archivePath, '.']
@@ -214,6 +195,9 @@ export async function packageForDrive(
       });
     });
 
+    onProgress({ status: 'packing', percent: 99, message: 'Đang kiểm tra file nén vừa tạo (7za t)...' });
+    await testArchive(archivePath, req.sourceDir, signal, () => {});
+
     const st = await fsp.stat(archivePath);
     onProgress({
       status: 'completed',
@@ -221,26 +205,25 @@ export async function packageForDrive(
       message: `Hoàn tất đóng gói (${path.basename(archivePath)})`,
     });
 
-    activePackAbort = null;
+    packJob.release(req.jobId, jobController);
     return {
       success: true,
+      ...sourceInfo,
       packMode: req.packMode,
       archivePaths: [archivePath],
       looseFilePaths: [],
       totalOutputBytes: st.size,
     };
   } catch (err) {
-    if (currentArchivePath) {
-      await fsp.unlink(currentArchivePath).catch(() => {});
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    const isCancelled = message === 'CANCELLED';
+    await unlinkQuietly(currentArchivePath);
+    const message = errorMessage(err);
+    const isCancelled = isCancelledMessage(message);
     onProgress({
       status: isCancelled ? 'cancelled' : 'error',
       percent: 0,
       message: isCancelled ? 'Đã hủy đóng gói' : message,
     });
-    activePackAbort = null;
+    packJob.release(req.jobId, jobController);
     return {
       success: false,
       packMode: req.packMode,
@@ -250,8 +233,6 @@ export async function packageForDrive(
       error: message,
     };
   } finally {
-    if (tempListFile) {
-      await fsp.unlink(tempListFile).catch(() => {});
-    }
+    await unlinkQuietly(tempListFile);
   }
 }

@@ -1,33 +1,11 @@
-import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
-import { readMediaShotDate, type DateSource } from './metadataService';
+import { execFileAsync, runPowerShell } from '../lib/exec';
+import type { DateSource, DriveInfo, FileEntry } from '../shared/types';
+import { hasEmbeddedShotDate } from './metadataService';
+import { cachedShotDate, readShotDateCached } from './shotDateCache';
 
-const execFileAsync = promisify(execFile);
-
-export interface DriveInfo {
-  id: string;
-  label: string;
-  mountPath: string;
-  totalBytes: number;
-  freeBytes: number;
-  usedPercent: number;
-  isRemovable: boolean;
-}
-
-export interface FileEntry {
-  name: string;
-  relativePath: string;
-  fullPath: string;
-  isDirectory: boolean;
-  sizeBytes: number;
-  mtimeMs: number;
-  shotTimeMs: number;
-  dateSource: DateSource;
-  mediaType: 'video' | 'photo' | 'raw' | 'folder' | 'other';
-  extension: string;
-}
+export type { DriveInfo, FileEntry } from '../shared/types';
 
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.mxf', '.mkv', '.avi', '.mts', '.m2ts', '.braw', '.r3d']);
 const PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.webp', '.tif', '.tiff']);
@@ -98,9 +76,7 @@ async function listWindowsDrives(): Promise<DriveInfo[]> {
       Select-Object DeviceID, VolumeName, Size, FreeSpace, DriveType |
       ConvertTo-Json -Compress
     `;
-    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', psScript], {
-      windowsHide: true,
-    });
+    const { stdout } = await runPowerShell(psScript);
     const trimmed = stdout.trim();
     if (!trimmed) return [];
     const parsed = JSON.parse(trimmed);
@@ -167,7 +143,22 @@ async function listPosixDrives(): Promise<DriveInfo[]> {
   }
 }
 
-export async function listDirectoryEntries(dirPath: string, readMetadata = true): Promise<FileEntry[]> {
+/**
+ * true = đọc ngày chụp (EXIF / MP4, có nhớ); false = dùng giờ sửa file;
+ * 'cached' = chỉ lấy ngày đã nhớ, chưa có thì để 'pending' (danh sách hiện ngay, ngày đọc ngầm sau).
+ */
+export type MetadataMode = boolean | 'cached';
+
+async function shotDateFor(fullPath: string, stat: { size: number; mtimeMs: number }, mode: MetadataMode) {
+  if (mode === true) return readShotDateCached(fullPath, stat.size, stat.mtimeMs);
+  if (mode === 'cached') {
+    if (!hasEmbeddedShotDate(fullPath)) return { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
+    return cachedShotDate(fullPath, stat.size, stat.mtimeMs) ?? { shotTimeMs: stat.mtimeMs, dateSource: 'pending' as DateSource };
+  }
+  return { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
+}
+
+export async function listDirectoryEntries(dirPath: string, readMetadata: MetadataMode = true): Promise<FileEntry[]> {
   if (!dirPath) return [];
   try {
     const dirents = (await fs.readdir(dirPath, { withFileTypes: true })).filter((d) => !isIgnoredSystemName(d.name));
@@ -178,10 +169,7 @@ export async function listDirectoryEntries(dirPath: string, readMetadata = true)
         const stat = await fs.stat(fullPath);
         const isDir = stat.isDirectory();
         const { mediaType, extension } = classifyFile(dirent.name, isDir);
-        const meta =
-          !isDir && readMetadata
-            ? await readMediaShotDate(fullPath, stat.mtimeMs)
-            : { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
+        const meta = isDir ? { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource } : await shotDateFor(fullPath, stat, readMetadata);
 
         return {
           name: dirent.name,
@@ -225,26 +213,73 @@ const SKIP_OS_ROOT_DIRS = new Set([
   'perflogs',
 ]);
 
+export interface ScanOptions {
+  maxDepth?: number;
+  maxFiles?: number;
+  /**
+   * 'truncate' = dừng ở giới hạn (chỉ dùng cho XEM danh sách).
+   * 'throw' = báo lỗi rõ ràng (dùng cho copy / đóng gói / báo cáo — không bao giờ bỏ sót file im lặng).
+   */
+  onLimit?: 'truncate' | 'throw';
+}
+
+/** Giới hạn khi chỉ để hiển thị (tránh treo khi lỡ chọn cả ổ hệ thống). */
+export const VIEW_SCAN_OPTIONS: ScanOptions = { maxDepth: 10, maxFiles: 20000, onLimit: 'truncate' };
+/** Giới hạn khi xử lý dữ liệu thật: rất lớn, chạm là báo lỗi. */
+export const DATA_SCAN_OPTIONS: ScanOptions = { maxDepth: 64, maxFiles: 1_000_000, onLimit: 'throw' };
+
+function isFilesystemRoot(dir: string): boolean {
+  const resolved = path.resolve(dir);
+  return path.parse(resolved).root === resolved;
+}
+
 export async function scanFilesRecursive(
   rootDir: string,
-  readMetadata = true,
-  maxDepth = 10,
-  maxFiles = 20000
+  readMetadata: MetadataMode = true,
+  options: ScanOptions = DATA_SCAN_OPTIONS
 ): Promise<FileEntry[]> {
+  const maxDepth = options.maxDepth ?? DATA_SCAN_OPTIONS.maxDepth!;
+  const maxFiles = options.maxFiles ?? DATA_SCAN_OPTIONS.maxFiles!;
+  const throwOnLimit = (options.onLimit ?? 'throw') === 'throw';
   const discoveredFiles: Array<{ name: string; fullPath: string }> = [];
+  // Thư mục hệ thống (Windows, Program Files, Library, System...) chỉ bỏ qua khi nằm NGAY GỐC ổ.
+  // Thư mục dự án tên "Library" / "System" bên trong Ổ 1 vẫn được sao lưu.
+  const skipOsDirsAtTop = isFilesystemRoot(rootDir);
+
+  const limitHit = (what: string) => {
+    if (throwOnLimit) {
+      throw new Error(
+        `Thư mục quá lớn (${what}). Đã dừng để không bỏ sót file — hãy chọn thư mục con cụ thể hơn: ${rootDir}`
+      );
+    }
+  };
 
   async function collectPaths(currentDir: string, depth: number) {
-    if (depth > maxDepth || discoveredFiles.length >= maxFiles) return;
+    if (depth > maxDepth) {
+      limitHit(`sâu hơn ${maxDepth} cấp`);
+      return;
+    }
+    if (discoveredFiles.length >= maxFiles) return;
     let dirents;
     try {
       dirents = await fs.readdir(currentDir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      // Thư mục con không đọc được khi xử lý dữ liệu => báo lỗi thay vì bỏ qua im lặng
+      if (throwOnLimit && depth > 0) {
+        throw new Error(`Không đọc được thư mục: ${currentDir} (${err instanceof Error ? err.message : String(err)})`);
+      }
+      if (throwOnLimit) throw err;
       return;
     }
     for (const dirent of dirents) {
-      if (discoveredFiles.length >= maxFiles) break;
+      if (discoveredFiles.length >= maxFiles) {
+        limitHit(`hơn ${maxFiles.toLocaleString('vi-VN')} file`);
+        break;
+      }
       if (isIgnoredSystemName(dirent.name)) continue;
-      if (dirent.isDirectory() && SKIP_OS_ROOT_DIRS.has(dirent.name.toLowerCase())) continue;
+      if (dirent.isDirectory() && depth === 0 && skipOsDirsAtTop && SKIP_OS_ROOT_DIRS.has(dirent.name.toLowerCase())) {
+        continue;
+      }
       const fullPath = path.join(currentDir, dirent.name);
       if (dirent.isDirectory()) {
         await collectPaths(fullPath, depth + 1);
@@ -260,9 +295,7 @@ export async function scanFilesRecursive(
     try {
       const stat = await fs.stat(item.fullPath);
       const { mediaType, extension } = classifyFile(item.name, false);
-      const meta = readMetadata
-        ? await readMediaShotDate(item.fullPath, stat.mtimeMs)
-        : { shotTimeMs: stat.mtimeMs, dateSource: 'mtime' as DateSource };
+      const meta = await shotDateFor(item.fullPath, stat, readMetadata);
 
       return {
         name: item.name,

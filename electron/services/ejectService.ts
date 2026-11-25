@@ -1,9 +1,7 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileAsync, runPowerShell } from '../lib/exec';
+import type { ActionResult } from '../shared/types';
 
-const execFileAsync = promisify(execFile);
-
-export async function safeEjectDrive(mountPath: string): Promise<{ ok: boolean; message: string }> {
+export async function safeEjectDrive(mountPath: string): Promise<ActionResult> {
   if (!mountPath) return { ok: false, message: 'Chưa chọn ổ đĩa / thẻ nhớ để Eject.' };
 
   try {
@@ -15,9 +13,7 @@ export async function safeEjectDrive(mountPath: string): Promise<{ ok: boolean; 
       const driveLetter = driveLetterMatch[1].toUpperCase();
       // Guard: only allow ejecting Removable drives (DriveType = 2)
       const checkCmd = `(Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='${driveLetter}'").DriveType`;
-      const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', checkCmd], {
-        windowsHide: true,
-      });
+      const { stdout } = await runPowerShell(checkCmd);
       if (stdout.trim() !== '2') {
         return {
           ok: false,
@@ -26,7 +22,7 @@ export async function safeEjectDrive(mountPath: string): Promise<{ ok: boolean; 
       }
 
       const psCmd = `(New-Object -ComObject Shell.Application).Namespace(17).ParseName('${driveLetter}').InvokeVerb('Eject')`;
-      await execFileAsync('powershell.exe', ['-NoProfile', '-Command', psCmd], { windowsHide: true });
+      await runPowerShell(psCmd);
       return { ok: true, message: `Đã gửi lệnh Safe Eject cho thẻ nhớ ${driveLetter}.` };
     }
 

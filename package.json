@@ -53,6 +53,15 @@
       "build/icon.png",
       "build/icon.ico"
     ],
+    "extraResources": [
+      {
+        "from": "build",
+        "to": ".",
+        "filter": [
+          "google-oauth-client.json"
+        ]
+      }
+    ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",
       "node_modules/7zip-bin/**"

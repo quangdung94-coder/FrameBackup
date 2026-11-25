@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { X, FileText, Image as ImageIcon } from 'lucide-react';
-import { formatDisplayDate, formatShortDate, type MediaReportResult } from '../types/framebackup';
+import { formatDisplayDate, formatShortDate, type BackupReport, type MediaReportResult } from '../types/framebackup';
 
 interface ReportPreviewModalProps {
   open: boolean;
@@ -8,6 +9,53 @@ interface ReportPreviewModalProps {
   targetDate: string;
   driveLink: string;
   mediaReport: MediaReportResult | null;
+  /** Báo cáo cuối (đã tạo sau khi up Drive). */
+  backupReport?: BackupReport | null;
+}
+
+/** Báo cáo cuối: xem bản PDF (HTML chữ to) hoặc bản .txt. */
+function FinalReportView({ report, onClose }: { report: BackupReport; onClose: () => void }) {
+  const [tab, setTab] = useState<'pdf' | 'txt'>('pdf');
+  const tabCls = (on: boolean) =>
+    `px-3 py-1 rounded-md text-xs font-semibold border ${
+      on ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#272730] border-[#3e3e4b] text-zinc-300 hover:bg-[#32323e]'
+    }`;
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-5"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="bg-[#1e1e24] border border-[#3e3e4b] rounded-xl w-[960px] max-w-full h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+        <div className="px-4 py-3 border-b border-[#2b2b34] flex items-center gap-2">
+          <span className={`font-bold text-sm truncate ${report.verdict === 'ok' ? 'text-emerald-300' : 'text-amber-300'}`}>
+            {report.headline}
+          </span>
+          <span className="flex-1" />
+          <button className={tabCls(tab === 'pdf')} onClick={() => setTab('pdf')}>
+            {report.pdfFileName ?? 'Bản PDF'}
+          </button>
+          <button className={tabCls(tab === 'txt')} onClick={() => setTab('txt')}>
+            {report.txtFileName}
+          </button>
+          <button
+            onClick={onClose}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#272730] hover:bg-[#32323e] text-zinc-300 text-xs"
+          >
+            <X className="w-3.5 h-3.5" /> Đóng
+          </button>
+        </div>
+        {tab === 'pdf' ? (
+          <iframe title="Báo cáo sao lưu" sandbox="" srcDoc={report.html} className="flex-1 w-full bg-white" />
+        ) : (
+          <pre className="flex-1 overflow-auto m-0 p-4 bg-[#0c0c0f] text-zinc-200 font-mono text-[13px] leading-relaxed whitespace-pre">
+            {report.text}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function ReportPreviewModal({
@@ -17,8 +65,10 @@ export function ReportPreviewModal({
   targetDate,
   driveLink,
   mediaReport,
+  backupReport,
 }: ReportPreviewModalProps) {
   if (!open) return null;
+  if (backupReport) return <FinalReportView report={backupReport} onClose={onClose} />;
   const displayDate = formatDisplayDate(targetDate);
 
   const first = mediaReport?.firstShot ?? null;

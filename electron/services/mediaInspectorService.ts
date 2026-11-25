@@ -1,69 +1,20 @@
-import { execFile } from 'node:child_process';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import exifr from 'exifr';
 import ffmpegPathRaw from 'ffmpeg-static';
+import { resolveUnpackedBinary } from '../lib/binaries';
+import { execFileAsync } from '../lib/exec';
+import { osStagingDir } from '../lib/tempFiles';
+import { formatDateTime, formatTimeTag } from '../shared/dates';
+import { formatBytes } from '../shared/format';
+import { toSafeAsciiName } from '../shared/paths';
+import { statsOf } from '../shared/report';
+import type { InspectReportRequest, MediaReportResult, ShotInfo } from '../shared/types';
 import { scanFilesRecursive, type FileEntry } from './diskService';
 
-const execFileAsync = promisify(execFile);
-const ffmpegPath = ffmpegPathRaw ? ffmpegPathRaw.replace('app.asar', 'app.asar.unpacked') : null;
+export type { InspectReportRequest, MediaReportResult, ShotInfo } from '../shared/types';
 
-export interface ShotInfo {
-  name: string;
-  relativePath: string;
-  shotTimeMs: number;
-  mediaType: FileEntry['mediaType'];
-  thumbnailPath?: string;
-  thumbnailFileName?: string;
-  thumbnailDataUrl?: string;
-}
-
-export interface MediaReportResult {
-  projectName: string;
-  stagingDir: string;
-  reportFilePath: string;
-  reportFileName: string;
-  reportText: string;
-  totalFiles: number;
-  videoCount: number;
-  photoCount: number;
-  rawCount: number;
-  totalBytes: number;
-  firstShot: ShotInfo | null;
-  lastShot: ShotInfo | null;
-}
-
-export interface InspectReportRequest {
-  projectName: string;
-  sourceDir: string;
-  verifyStatusText?: string;
-  skippedOldFiles?: number;
-  keptMismatchFiles?: number;
-}
-
-function formatDateTime(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(
-    d.getMinutes()
-  )}:${pad(d.getSeconds())}`;
-}
-
-function formatTimeTag(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}h${pad(d.getMinutes())}`;
-}
-
-function formatBytesHuman(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const val = bytes / Math.pow(1024, i);
-  return `${val >= 100 ? val.toFixed(0) : val >= 10 ? val.toFixed(1) : val.toFixed(2)} ${units[i]}`;
-}
+const ffmpegPath = resolveUnpackedBinary(ffmpegPathRaw);
 
 async function extractVideoThumbnail(videoPath: string, outJpgPath: string): Promise<boolean> {
   if (!ffmpegPath) return false;
@@ -140,9 +91,24 @@ async function generateShotThumbnail(
   }
 }
 
+async function buildShotInfo(
+  file: FileEntry | null,
+  prefix: '_01_FIRST_SHOT' | '_02_LAST_SHOT',
+  stagingDir: string
+): Promise<ShotInfo | null> {
+  if (!file) return null;
+  const thumb = await generateShotThumbnail(file, prefix, stagingDir);
+  return {
+    name: file.name,
+    relativePath: file.relativePath,
+    shotTimeMs: file.shotTimeMs,
+    mediaType: file.mediaType,
+    ...thumb,
+  };
+}
+
 export async function inspectAndBuildReport(req: InspectReportRequest): Promise<MediaReportResult> {
-  const safeProj = req.projectName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'FrameBackup_Show';
-  const stagingDir = path.join(os.tmpdir(), 'framebackup_staging', safeProj);
+  const stagingDir = osStagingDir(toSafeAsciiName(req.projectName));
   await fsp.mkdir(stagingDir, { recursive: true });
 
   const allFiles = await scanFilesRecursive(req.sourceDir, true);
@@ -159,29 +125,8 @@ export async function inspectAndBuildReport(req: InspectReportRequest): Promise<
   const firstFile = sortedMedia[0] ?? null;
   const lastFile = sortedMedia.length > 0 ? sortedMedia[sortedMedia.length - 1] : null;
 
-  let firstShot: ShotInfo | null = null;
-  if (firstFile) {
-    const thumb = await generateShotThumbnail(firstFile, '_01_FIRST_SHOT', stagingDir);
-    firstShot = {
-      name: firstFile.name,
-      relativePath: firstFile.relativePath,
-      shotTimeMs: firstFile.shotTimeMs,
-      mediaType: firstFile.mediaType,
-      ...thumb,
-    };
-  }
-
-  let lastShot: ShotInfo | null = null;
-  if (lastFile) {
-    const thumb = await generateShotThumbnail(lastFile, '_02_LAST_SHOT', stagingDir);
-    lastShot = {
-      name: lastFile.name,
-      relativePath: lastFile.relativePath,
-      shotTimeMs: lastFile.shotTimeMs,
-      mediaType: lastFile.mediaType,
-      ...thumb,
-    };
-  }
+  const firstShot = await buildShotInfo(firstFile, '_01_FIRST_SHOT', stagingDir);
+  const lastShot = await buildShotInfo(lastFile, '_02_LAST_SHOT', stagingDir);
 
   const lines: string[] = [
     '=========================================',
@@ -189,7 +134,7 @@ export async function inspectAndBuildReport(req: InspectReportRequest): Promise<
     `Project  : ${req.projectName}`,
     `Generated: ${formatDateTime(Date.now())}`,
     '=========================================',
-    `- Total Files  : ${allFiles.length} files (${formatBytesHuman(totalBytes)})`,
+    `- Total Files  : ${allFiles.length} files (${formatBytes(totalBytes)})`,
     `- Breakdown    : ${videoCount} Video | ${rawCount} RAW | ${photoCount} Photo`,
     `- Verify Ổ 1&2 : ${req.verifyStatusText || 'PASSED (XXHash64 100%)'}`,
   ];
@@ -234,6 +179,7 @@ export async function inspectAndBuildReport(req: InspectReportRequest): Promise<
     photoCount,
     rawCount,
     totalBytes,
+    drive1Stats: statsOf(allFiles),
     firstShot,
     lastShot,
   };

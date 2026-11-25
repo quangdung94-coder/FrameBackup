@@ -70,3 +70,35 @@
   - **Windows**: Sleep (`rundll32.exe powrprof.dll,SetSuspendState 0,1,0`) / Shutdown (`shutdown /s /t 60`).
   - **macOS**: Sleep (`pmset sleepnow` hoặc `osascript -e 'tell app "System Events" to sleep'`).
 - **Đóng gói Windows & macOS**: Sử dụng `electron-builder` kết hợp **GitHub Actions** (runner macOS & Windows) ở Phase 5 để tự động xuất đồng thời `.exe` và `.dmg`.
+
+---
+
+## 3. Tổ chức mã nguồn (refactor v1.1.0-dev, 25/11/2026)
+
+```text
+electron/
+  main.ts            Cửa sổ + single-instance, gọi registerIpcHandlers()
+  preload.ts         Bridge window.frameBackup, kiểu = FrameBackupBridge
+  shared/            ★ Hợp đồng IPC dùng chung main + renderer (chỉ type & hàm thuần)
+    types.ts         Mọi type IPC + FrameBackupBridge
+    ipcChannels.ts   Tên kênh IPC (IPC.*, IPC_EVENTS.*)
+    format.ts dates.ts paths.ts driveLink.ts constants.ts
+  ipc/               Đăng ký IPC theo nhóm: system, disk, pipeline (copy/watch/media/pack), drive
+  lib/               process (spawn có hủy), jobSlot (1 job có thể hủy), hash (XXHash64),
+                     tempFiles, exec, binaries (asar.unpacked), progress, errors, abort
+  services/          copyVerify, copyEngine, disk, metadata, mediaInspector, packaging,
+                     watch, eject, power, googleDrive/{storage,auth,folders,upload}
+src/
+  App.tsx            Điều phối state & chuỗi sao lưu
+  components/columns CardColumn, Drive1Column, Drive2Column, GoogleDriveColumn
+  components/layout  TopStatusBar, RibbonToolbar, ColumnParts, Splitters, tones
+  hooks/             useColumnLayout, useRowSelection, useDropZone, useActivityLog, useLatestRef
+  lib/               storage, cardAnalysis, uploadPlan, dragData, paths, time, demo
+  types/framebackup.ts  Re-export electron/shared (giữ đường import cũ)
+```
+
+**Quy tắc khi thêm tính năng:**
+- Thêm/đổi kiểu dữ liệu IPC: sửa `electron/shared/types.ts` (renderer tự nhận qua re-export).
+- Thêm kênh IPC: khai báo trong `electron/shared/ipcChannels.ts`, đăng ký trong `electron/ipc/<nhóm>Ipc.ts`, thêm vào `FrameBackupBridge` và `preload.ts`.
+- Job dài có nút Dừng: dùng `createJobSlot()` + `runAbortableProcess()` / `CANCELLED`.
+- `preload.ts` require được `./shared/ipcChannels` vì BrowserWindow đang chạy `sandbox: false`.

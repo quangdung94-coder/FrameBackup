@@ -1,22 +1,12 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
+import { execFileAsync } from '../lib/exec';
+import { runAbortableProcess } from '../lib/process';
+import { unlinkQuietly, writeTempListFile } from '../lib/tempFiles';
+import type { CopyEngineId, CopyEngineOption } from '../shared/types';
 
-const execFileAsync = promisify(execFile);
-
-export type CopyEngineId = 'builtin' | 'teracopy' | 'robocopy' | 'fastcopy' | 'rsync' | 'ditto';
-
-export interface CopyEngineOption {
-  id: CopyEngineId;
-  name: string;
-  description: string;
-  available: boolean;
-  executablePath?: string;
-  platform: 'all' | 'win32' | 'darwin';
-}
+export type { CopyEngineId, CopyEngineOption } from '../shared/types';
 
 /**
  * Normalizes a directory path for Windows CLI tools like Robocopy so trailing backslashes
@@ -144,12 +134,14 @@ export interface ExternalCopyParams {
   destDir: string;
   filteredFilePaths?: string[];
   relativeFilePaths?: string[];
+  /** Chép phẳng (bỏ cấu trúc thư mục con) — dùng khi ingest từ thẻ. */
+  flatten?: boolean;
   signal: AbortSignal;
   onLog?: (line: string) => void;
 }
 
 export async function runExternalCopyEngine(params: ExternalCopyParams): Promise<void> {
-  const { engine, executablePath, sourceDir, destDir, filteredFilePaths, relativeFilePaths, signal, onLog } = params;
+  const { engine, executablePath, sourceDir, destDir, filteredFilePaths, relativeFilePaths, flatten, signal, onLog } = params;
   await fsp.mkdir(destDir, { recursive: true });
 
   let tempListFile: string | null = null;
@@ -157,22 +149,17 @@ export async function runExternalCopyEngine(params: ExternalCopyParams): Promise
 
   if (engine === 'teracopy') {
     const safeDest = safeWindowsCliDir(destDir);
-    if (filteredFilePaths && filteredFilePaths.length > 0) {
-      tempListFile = path.join(os.tmpdir(), `framebackup_tera_${Date.now()}.txt`);
-      await fsp.writeFile(tempListFile, filteredFilePaths.join('\r\n'), 'utf8');
-      args = ['Copy', `*${tempListFile}`, safeDest, '/Close'];
-    } else {
-      // Copy contents of sourceDir directly into destDir without extra nested wrapper
-      const topEntries = (await fsp.readdir(sourceDir)).map((name) => path.join(sourceDir, name));
-      tempListFile = path.join(os.tmpdir(), `framebackup_tera_${Date.now()}.txt`);
-      await fsp.writeFile(tempListFile, topEntries.join('\r\n'), 'utf8');
-      args = ['Copy', `*${tempListFile}`, safeDest, '/Close'];
-    }
+    // Không lọc: chép nội dung sourceDir thẳng vào destDir (không tạo thêm thư mục bọc ngoài)
+    const listEntries =
+      filteredFilePaths && filteredFilePaths.length > 0
+        ? filteredFilePaths
+        : (await fsp.readdir(sourceDir)).map((name) => path.join(sourceDir, name));
+    tempListFile = await writeTempListFile('framebackup_tera', listEntries, '\r\n');
+    args = ['Copy', `*${tempListFile}`, safeDest, '/Close'];
   } else if (engine === 'fastcopy') {
     const safeDest = safeWindowsCliDir(destDir);
     if (filteredFilePaths && filteredFilePaths.length > 0) {
-      tempListFile = path.join(os.tmpdir(), `framebackup_fast_${Date.now()}.txt`);
-      await fsp.writeFile(tempListFile, filteredFilePaths.join('\r\n'), 'utf8');
+      tempListFile = await writeTempListFile('framebackup_fast', filteredFilePaths, '\r\n');
       args = ['/cmd=diff', '/verify', '/auto_close', `/srcfile=${tempListFile}`, `/to=${safeDest}`];
     } else {
       const safeSrc = safeWindowsCliDir(sourceDir);
@@ -193,9 +180,9 @@ export async function runExternalCopyEngine(params: ExternalCopyParams): Promise
     ];
   } else if (engine === 'rsync') {
     if (relativeFilePaths && relativeFilePaths.length > 0) {
-      tempListFile = path.join(os.tmpdir(), `framebackup_rsync_${Date.now()}.txt`);
-      await fsp.writeFile(tempListFile, relativeFilePaths.join('\n'), 'utf8');
-      args = ['-a', '--relative', `--files-from=${tempListFile}`, sourceDir, destDir];
+      tempListFile = await writeTempListFile('framebackup_rsync', relativeFilePaths, '\n');
+      // --files-from mặc định giữ đường dẫn tương đối; --no-relative để chép phẳng khi ingest từ thẻ
+      args = ['-a', flatten ? '--no-relative' : '--relative', `--files-from=${tempListFile}`, sourceDir, destDir];
     } else {
       const normalizedSrc = sourceDir.endsWith('/') ? sourceDir : `${sourceDir}/`;
       args = ['-a', normalizedSrc, destDir];
@@ -205,43 +192,22 @@ export async function runExternalCopyEngine(params: ExternalCopyParams): Promise
   }
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      const child: ChildProcess = spawn(executablePath, args, {
-        windowsHide: engine === 'robocopy',
-      });
-
-      const onAbort = () => {
-        child.kill();
-        reject(new Error('CANCELLED'));
-      };
-      if (signal.aborted) return onAbort();
-      signal.addEventListener('abort', onAbort, { once: true });
-
-      child.stdout?.on('data', (d) => {
+    await runAbortableProcess(executablePath, {
+      args,
+      signal,
+      windowsHide: engine === 'robocopy',
+      onOutput: (d) => {
         const line = d.toString().trim();
         if (line) onLog?.(line);
-      });
-      child.stderr?.on('data', (d) => {
-        const line = d.toString().trim();
-        if (line) onLog?.(line);
-      });
-
-      child.on('error', (err) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(err);
-      });
-
-      child.on('close', (code) => {
-        signal.removeEventListener('abort', onAbort);
+      },
+      // Robocopy: mã < 8 là thành công (1 = đã copy, 2 = có file thừa...)
+      isSuccessExitCode: (code) => {
         const exitCode = code ?? 0;
-        const ok = engine === 'robocopy' ? exitCode < 8 : exitCode === 0;
-        if (ok) resolve();
-        else reject(new Error(`Trình copy ${engine} kết thúc với mã lỗi ${exitCode}`));
-      });
+        return engine === 'robocopy' ? exitCode < 8 : exitCode === 0;
+      },
+      formatExitError: (code) => `Trình copy ${engine} kết thúc với mã lỗi ${code ?? 0}`,
     });
   } finally {
-    if (tempListFile) {
-      await fsp.unlink(tempListFile).catch(() => {});
-    }
+    await unlinkQuietly(tempListFile);
   }
 }

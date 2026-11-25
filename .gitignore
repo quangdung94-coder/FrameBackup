@@ -21,6 +21,7 @@ release/
 credentials.json
 token.json
 google-oauth.json
+build/google-oauth-client.json
 
 # Logs & Temp
 logs/

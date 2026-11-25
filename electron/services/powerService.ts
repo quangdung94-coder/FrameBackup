@@ -1,17 +1,15 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileAsync, runPowerShell } from '../lib/exec';
+import type { ActionResult, PowerActionType } from '../shared/types';
 
-const execFileAsync = promisify(execFile);
+export type { PowerActionType } from '../shared/types';
 
-export type PowerActionType = 'sleep' | 'shutdown';
-
-export async function executePowerAction(action: PowerActionType): Promise<{ ok: boolean; message: string }> {
+export async function executePowerAction(action: PowerActionType): Promise<ActionResult> {
   try {
     if (process.platform === 'win32') {
       if (action === 'sleep') {
         const psCmd =
           "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)";
-        await execFileAsync('powershell.exe', ['-NoProfile', '-Command', psCmd], { windowsHide: true });
+        await runPowerShell(psCmd);
         return { ok: true, message: 'Đang đưa máy tính Windows vào chế độ Sleep...' };
       }
       await execFileAsync('shutdown.exe', ['/s', '/t', '5'], { windowsHide: true });

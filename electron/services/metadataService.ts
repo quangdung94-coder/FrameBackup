@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import exifr from 'exifr';
+import type { DateSource } from '../shared/types';
 
-export type DateSource = 'exif' | 'video-atom' | 'mtime';
+export type { DateSource } from '../shared/types';
 
 export interface MediaDateResult {
   shotTimeMs: number;
@@ -88,6 +89,12 @@ async function readMp4CreationTimeMs(filePath: string): Promise<number | null> {
   } finally {
     if (handle) await handle.close().catch(() => {});
   }
+}
+
+/** File có ngày chụp nằm bên trong (EXIF / MP4) — các loại khác dùng giờ sửa file, không cần đọc. */
+export function hasEmbeddedShotDate(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return IMAGE_OR_RAW_EXTS.has(ext) || MP4_MOV_EXTS.has(ext);
 }
 
 export async function readMediaShotDate(filePath: string, fallbackMtimeMs: number): Promise<MediaDateResult> {
