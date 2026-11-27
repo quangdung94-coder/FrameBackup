@@ -11,6 +11,7 @@ export interface WorkspaceMenuParams {
   cardPath: string;
   drive1View: string;
   drive2View: string;
+  d1SelectedCount: number;
   d2SelectedCount: number;
   shared: SharedWorkspace;
   navigateCard: (dir: string) => void;
@@ -125,7 +126,7 @@ export function createWorkspaceMenus(p: WorkspaceMenuParams) {
       { label: 'Check access', disabled: !link || !signedIn, onSelect: () => void shared.checkDriveLink() },
       { label: 'Choose Drive folder…', disabled: !signedIn, onSelect: () => void shared.pickDriveFolder() },
       {
-        label: 'Upload Drive 1 folder',
+        label: p.d1SelectedCount > 0 ? `Upload ${p.d1SelectedCount} selected from Drive 1` : 'Upload Drive 1 folder',
         separatorBefore: true,
         disabled: busy || !signedIn || !link || !p.drive1View,
         onSelect: p.onUploadOnly,

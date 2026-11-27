@@ -7,7 +7,7 @@ import { formatBytes } from '../shared/format';
 import { toSafeAsciiName } from '../shared/paths';
 import { statsOf } from '../shared/report';
 import type { InspectReportRequest, MediaReportResult, ShotInfo } from '../shared/types';
-import { scanFilesRecursive, type FileEntry } from './diskService';
+import { scanFilesRecursive, scanSelectedFiles, type FileEntry } from './diskService';
 
 export type { InspectReportRequest, MediaReportResult, ShotInfo } from '../shared/types';
 
@@ -60,7 +60,10 @@ export async function inspectAndBuildReport(req: InspectReportRequest): Promise<
   const stagingDir = osStagingDir(toSafeAsciiName(req.projectName));
   await fsp.mkdir(stagingDir, { recursive: true });
 
-  const allFiles = await scanFilesRecursive(req.sourceDir, true);
+  const allFiles =
+    req.selectedFilePaths && req.selectedFilePaths.length > 0
+      ? await scanSelectedFiles(req.sourceDir, req.selectedFilePaths, true)
+      : await scanFilesRecursive(req.sourceDir, true);
   const mediaFiles = allFiles.filter(
     (f) => f.mediaType === 'video' || f.mediaType === 'photo' || f.mediaType === 'raw'
   );

@@ -34,13 +34,21 @@ export { preflightCopy } from './copyPlan';
 
 const copyJob = createJobPool();
 
-async function copyFileAtomicAndHashSource(
+interface PendingTempCopy {
+  srcPath: string;
+  destPath: string;
+  tmpDest: string;
+  srcHash: string;
+}
+
+/** Pha 1: Đọc nguồn + ghi file tạm .fbpart + tính XXHash64 nguồn trong cùng 1 lượt đọc. */
+async function copyFileToTempAndHashSource(
   srcPath: string,
   destPath: string,
   mtimeMs: number,
   signal: AbortSignal,
   onChunk: (bytes: number) => void
-): Promise<string> {
+): Promise<PendingTempCopy> {
   const api = await getXxhash();
   const hasher = api.create64();
   await fsp.mkdir(path.dirname(destPath), { recursive: true });
@@ -95,7 +103,18 @@ async function copyFileAtomicAndHashSource(
     const mtimeDate = new Date(mtimeMs);
     await fsp.utimes(tmpDest, mtimeDate, mtimeDate).catch(() => {});
 
-    // Verify XXHash64 of tmpDest against source stream hash
+    return { srcPath, destPath, tmpDest, srcHash };
+  } catch (err) {
+    // Always remove incomplete .fbpart file on error or cancellation
+    await fsp.unlink(tmpDest).catch(() => {});
+    throw err;
+  }
+}
+
+/** Pha 2 (chạy gối đầu ở nền): Đọc lại .fbpart tính XXHash64, so khớp 100%, đổi tên atomic & ghi sổ verify. */
+async function verifyAndPromoteTempFile(item: PendingTempCopy, signal: AbortSignal): Promise<string> {
+  const { srcPath, destPath, tmpDest, srcHash } = item;
+  try {
     const destHash = await hashFileXx64(tmpDest, signal);
     if (srcHash !== destHash) {
       throw new Error(`Lỗi toàn vẹn dữ liệu (XXHash64 không khớp) ở file: ${path.basename(destPath)}`);
@@ -114,7 +133,6 @@ async function copyFileAtomicAndHashSource(
     }
     return srcHash;
   } catch (err) {
-    // Always remove incomplete .fbpart file on error or cancellation
     await fsp.unlink(tmpDest).catch(() => {});
     throw err;
   }
@@ -349,52 +367,39 @@ export async function runCopyAndVerify(
       }
     }
 
-    // Built-in atomic streaming copy + Smart Resume + XXHash64 verification
+    // Built-in atomic streaming copy + Smart Resume + Pipelined XXHash64 verification (chạy gối đầu)
     const claimed = new Set<string>(Array.from(plan.preferredDest.values()).map(samePath));
-    for (const file of filesToCopy) {
-      if (signal.aborted) throw cancelledError();
+    let pendingVerify: Promise<void> | null = null;
+    let verifyError: unknown = null;
 
-      const decision = await resolveDestination(
-        file,
-        plan.preferredDest.get(file.fullPath)!,
-        policy,
-        claimed,
-        signal,
-        () =>
-          emit({
-            status: 'verifying',
-            currentFile: `Kiểm tra file đã có (Resume): ${file.name}`,
-            filesCompleted,
-            totalFiles,
-            skippedFiles,
-            resumedFiles,
-            verifiedFiles,
-            bytesCopied,
-            totalBytes,
-            percent: calcPercent(bytesCopied, totalBytes),
-            speedMBs: calcSpeedMBs(bytesCopied, startedAt),
-          }),
-        () => {
-          ledgerHits += 1;
-        }
-      );
+    const drainPendingVerify = async () => {
+      if (pendingVerify) {
+        const current = pendingVerify;
+        pendingVerify = null;
+        await current;
+      }
+      if (verifyError) {
+        const err = verifyError;
+        verifyError = null;
+        throw err;
+      }
+    };
 
-      if (decision.action === 'resume') {
-        bytesCopied += file.sizeBytes;
-        resumedFiles += 1;
-        verifiedFiles += 1;
-      } else if (decision.action === 'skip') {
-        bytesCopied += file.sizeBytes;
-        skippedConflicts += 1;
-      } else {
-        if (decision.renamed) renamedFiles += 1;
-        await copyFileAtomicAndHashSource(file.fullPath, decision.destPath, file.mtimeMs, signal, (chunkBytes) => {
-          bytesCopied += chunkBytes;
-          const now = Date.now();
-          if (shouldEmit(now)) {
+    try {
+      for (const file of filesToCopy) {
+        if (signal.aborted) throw cancelledError();
+        if (verifyError) await drainPendingVerify();
+
+        const decision = await resolveDestination(
+          file,
+          plan.preferredDest.get(file.fullPath)!,
+          policy,
+          claimed,
+          signal,
+          () =>
             emit({
-              status: 'copying',
-              currentFile: file.name,
+              status: 'verifying',
+              currentFile: `Kiểm tra file đã có (Resume): ${file.name}`,
               filesCompleted,
               totalFiles,
               skippedFiles,
@@ -403,13 +408,90 @@ export async function runCopyAndVerify(
               bytesCopied,
               totalBytes,
               percent: calcPercent(bytesCopied, totalBytes),
-              speedMBs: calcSpeedMBs(bytesCopied, startedAt, now),
-            });
+              speedMBs: calcSpeedMBs(bytesCopied, startedAt),
+            }),
+          () => {
+            ledgerHits += 1;
           }
-        });
-        verifiedFiles += 1;
+        );
+
+        if (decision.action === 'resume') {
+          bytesCopied += file.sizeBytes;
+          resumedFiles += 1;
+          verifiedFiles += 1;
+          filesCompleted += 1;
+        } else if (decision.action === 'skip') {
+          bytesCopied += file.sizeBytes;
+          skippedConflicts += 1;
+          filesCompleted += 1;
+        } else {
+          if (decision.renamed) renamedFiles += 1;
+          const tempItem = await copyFileToTempAndHashSource(
+            file.fullPath,
+            decision.destPath,
+            file.mtimeMs,
+            signal,
+            (chunkBytes) => {
+              bytesCopied += chunkBytes;
+              const now = Date.now();
+              if (shouldEmit(now)) {
+                emit({
+                  status: 'copying',
+                  currentFile: file.name,
+                  filesCompleted,
+                  totalFiles,
+                  skippedFiles,
+                  resumedFiles,
+                  verifiedFiles,
+                  bytesCopied,
+                  totalBytes,
+                  percent: calcPercent(bytesCopied, totalBytes),
+                  speedMBs: calcSpeedMBs(bytesCopied, startedAt, now),
+                });
+              }
+            }
+          );
+
+          // Chờ file trước verify xong trước khi đưa file vừa chép vào luồng verify gối đầu
+          try {
+            await drainPendingVerify();
+          } catch (prevErr) {
+            await fsp.unlink(tempItem.tmpDest).catch(() => {});
+            throw prevErr;
+          }
+
+          pendingVerify = verifyAndPromoteTempFile(tempItem, signal)
+            .then(() => {
+              verifiedFiles += 1;
+              filesCompleted += 1;
+            })
+            .catch((err) => {
+              verifyError = err;
+            });
+        }
       }
-      filesCompleted += 1;
+
+      // Đợi file cuối cùng verify & đổi tên hoàn tất 100%
+      if (pendingVerify) {
+        emit({
+          status: 'verifying',
+          currentFile: 'Đang hoàn tất Verify XXHash64 file cuối...',
+          filesCompleted,
+          totalFiles,
+          skippedFiles,
+          resumedFiles,
+          verifiedFiles,
+          bytesCopied: totalBytes,
+          totalBytes,
+          percent: 99,
+          speedMBs: calcSpeedMBs(totalBytes, startedAt),
+        });
+      }
+      await drainPendingVerify();
+    } catch (loopErr) {
+      // Đảm bảo luồng verify nền dừng hẳn trước khi thoát (tránh file handle treo / .fbpart sót)
+      if (pendingVerify) await pendingVerify.catch(() => {});
+      throw loopErr;
     }
 
     const notes = [

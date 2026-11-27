@@ -8,7 +8,7 @@ import { runAbortableProcess } from '../lib/process';
 import { osStagingDir, unlinkQuietly, writeTempListFile } from '../lib/tempFiles';
 import { toSafeAsciiName } from '../shared/paths';
 import type { PackageProgressEvent, PackageRequest, PackageResult } from '../shared/types';
-import { listSystemDrives, scanFilesRecursive } from './diskService';
+import { listSystemDrives, scanFilesRecursive, scanSelectedFiles } from './diskService';
 
 export type { PackMode, PackageProgressEvent, PackageRequest, PackageResult } from '../shared/types';
 
@@ -96,17 +96,10 @@ export async function packageForDrive(
 
   try {
     onProgress({ status: 'scanning', percent: 5, message: 'Đang phân loại Video / Ảnh để đóng gói...' });
-    const scannedFiles = await scanFilesRecursive(req.sourceDir, false);
     const hasSelection = Boolean(req.selectedFilePaths && req.selectedFilePaths.length > 0);
-    const selectedNorms = hasSelection
-      ? req.selectedFilePaths!.map((p) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase())
-      : null;
-    const allFiles = selectedNorms
-      ? scannedFiles.filter((f) => {
-          const norm = path.resolve(f.fullPath).toLowerCase();
-          return selectedNorms.some((sel) => norm === sel || norm.startsWith(sel + path.sep));
-        })
-      : scannedFiles;
+    const allFiles = hasSelection
+      ? await scanSelectedFiles(req.sourceDir, req.selectedFilePaths!, false)
+      : await scanFilesRecursive(req.sourceDir, false);
     const sourceInfo = { sourceFiles: allFiles.length, sourceBytes: allFiles.reduce((s, f) => s + f.sizeBytes, 0) };
 
     if (req.packMode === 'none') {

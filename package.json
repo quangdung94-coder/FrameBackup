@@ -1,6 +1,6 @@
 {
   "name": "framebackup",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "FrameBackup — 4-Column Video & Photo Backup Assistant for Windows and macOS",
   "author": "quangdung94-coder",
   "main": "dist-electron/main.js",

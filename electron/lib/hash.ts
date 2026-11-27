@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import xxhash from 'xxhash-wasm';
 import { cancelledError } from './errors';
 
-/** Kích thước buffer đọc/ghi stream khi copy & hash (4 MB). */
-export const STREAM_CHUNK_BYTES = 4 * 1024 * 1024;
+/** Kích thước buffer đọc/ghi stream khi copy & hash (16 MB — tối ưu cho file video lớn). */
+export const STREAM_CHUNK_BYTES = 16 * 1024 * 1024;
 
 let xxhashApiPromise: ReturnType<typeof xxhash> | null = null;
 

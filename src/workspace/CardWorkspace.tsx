@@ -713,7 +713,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
   const resolveDrive1Source = (): string => trimTrailingSeparators(drive1View) || drive1View;
 
   // ---- ☁ Chỉ Up Drive: không chép thẻ, không đụng Ổ 2 ----
-  const handleUploadOnly = async () => {
+  const handleUploadOnly = async (overrideSelectedPaths?: string[]) => {
     const api = window.frameBackup;
     if (!api) return;
     if (!drive1View) {
@@ -725,7 +725,77 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
       return;
     }
     if (isBusy()) return;
+
     const source = resolveDrive1Source();
+    const pathsToUse = overrideSelectedPaths ?? Array.from(d1Selected);
+    const packMode = resolveEffectivePackMode(shared.uploadPack, shared.packMode);
+
+    // Có tích chọn mục cụ thể ở Ổ 1 => CHỈ quét, trích Thumbnail, đóng gói & upload đúng các mục đó
+    if (pathsToUse.length > 0) {
+      const end = await beginRun();
+      if (!end) return;
+      progress.set({ step1: null, step2: null, step3: null, step4: null, watch: null });
+      setMediaReport(null);
+      setBackupReport(null);
+      try {
+        await keepAwake();
+        const stagingName = tab.camFolder.trim() ? `${showName}_${tab.camFolder.trim()}` : showName;
+        const flow = await runPackUploadAndReport({
+          jobId,
+          sourceDir: source,
+          reportDrive1Dir: pathsToUse.length === 1 ? pathsToUse[0] : source,
+          stagingName,
+          camFolder: tab.camFolder,
+          packMode,
+          selectedFilePaths: pathsToUse,
+          shared,
+          progress,
+          drive2VerifiedNow: false,
+          notes: [
+            `Upload trực tiếp ${pathsToUse.length} mục đã chọn từ Ổ 1 (${source}, ${
+              packMode === 'none' ? 'không nén' : 'có nén'
+            }) lên Google Drive.`,
+          ],
+          onMediaReport: setMediaReport,
+          onBackupReport: setBackupReport,
+        });
+        if (flow.emptySelection) {
+          showToast('Không có file nào trong các mục đang chọn ở Ổ 1 để upload.');
+          return;
+        }
+        if (flow.aborted || !flow.report || !flow.media || !flow.driveInfo || !flow.packRes) return;
+        if (flow.driveInfo.status === 'uploaded') {
+          await shared.reloadSystem();
+          showToast(
+            `✅ Đã upload ${flow.packRes.sourceFiles ?? 0} file từ Ổ 1 (${
+              packMode === 'none' ? 'không nén' : 'có nén'
+            }) + báo cáo PDF & 2 Thumbnail lên Google Drive!`
+          );
+          const ok = flow.report.verdict === 'ok';
+          shared.finishJob(
+            jobId,
+            {
+              projectName: tab.camFolder.trim() ? `${showName} / ${tab.camFolder.trim()}` : showName,
+              totalFiles: flow.media.totalFiles,
+              totalBytes: flow.media.totalBytes,
+              drive1Path: pathsToUse.length === 1 ? pathsToUse[0] : source,
+              drive2BackedUp: false,
+              driveUploaded: true,
+              driveWebLink: flow.webLink,
+              verdict: flow.report.verdict,
+            },
+            ok
+          );
+        }
+      } catch (err) {
+        showToast(`❌ Lỗi Upload từ Ổ 1 lên Drive: ${errorText(err)}`);
+      } finally {
+        end();
+      }
+      return;
+    }
+
+    // Không tích chọn gì => up cả thư mục đang mở ở Ổ 1
     const ledger = await api.getShowLedger(source);
     const skipNote = (at: number) => `✓ Đã verify lúc ${formatDateTime(at)} — bỏ qua`;
     progress.set({
@@ -742,7 +812,6 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     setMediaReport(null);
     setBackupReport(null);
     await keepAwake();
-    const packMode = resolveEffectivePackMode(shared.uploadPack, shared.packMode);
     await runAfterDrive1(source, {
       skipStep2: true,
       packMode,
@@ -1149,6 +1218,7 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
     cardPath,
     drive1View,
     drive2View,
+    d1SelectedCount: d1Selected.size,
     d2SelectedCount: d2Selected.size,
     shared,
     navigateCard: cardNav.go,
@@ -1270,9 +1340,13 @@ export function CardWorkspace({ tab, active, tabCount, shared, progress, initial
             disabled={busy}
             onClick={() => void handleUploadOnly()}
             className="h-10 inline-flex items-center gap-2 px-4 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 border border-purple-400/60 text-white font-bold text-sm shadow-lg shadow-purple-950/40 transition"
-            title="Chỉ upload thẳng từ thư mục đang mở ở Ổ 1 lên Google Drive (KHÔNG chép Thẻ, KHÔNG qua Ổ 2). Có tạo Báo cáo PDF + 2 Thumbnail."
+            title={
+              d1Selected.size > 0
+                ? `Chỉ upload đúng ${d1Selected.size} mục đang tích chọn ở Ổ 1 lên Google Drive (KHÔNG chép Thẻ, KHÔNG qua Ổ 2). Có tạo Báo cáo PDF + 2 Thumbnail.`
+                : `Upload cả thư mục đang mở ở Ổ 1 (${drive1View || 'chưa chọn'}) lên Google Drive (KHÔNG chép Thẻ, KHÔNG qua Ổ 2). Có tạo Báo cáo PDF + 2 Thumbnail.`
+            }
           >
-            <CloudUpload className="w-4 h-4" /> Ổ 1 ➔ Drive
+            <CloudUpload className="w-4 h-4" /> {d1Selected.size > 0 ? `Ổ 1 ➔ Drive (${d1Selected.size} mục)` : 'Ổ 1 ➔ Drive'}
           </button>
         )}
 

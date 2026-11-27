@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { packageForDrive } from '../electron/services/packagingService';
+import { scanSelectedFiles } from '../electron/services/diskService';
 
 let tmpRoot: string;
 
@@ -73,5 +74,29 @@ describe('packagingService', () => {
     expect(res.archivePaths).toHaveLength(1);
 
     for (const ap of res.archivePaths) await fsp.unlink(ap).catch(() => {});
+  });
+
+  it('scans and packages only the selected subfolder without touching sibling show folders', async () => {
+    const parent = path.join(tmpRoot, 'Drive1Root');
+    const oldShow = path.join(parent, '2026.11.07.ShowOld');
+    const todayShow = path.join(parent, '2026.11.27.ShowToday');
+    await fsp.mkdir(oldShow, { recursive: true });
+    await fsp.mkdir(todayShow, { recursive: true });
+    await fsp.writeFile(path.join(oldShow, 'old.mp4'), Buffer.from('old-video'));
+    const todayClip = path.join(todayShow, 'today.mp4');
+    await fsp.writeFile(todayClip, Buffer.from('today-video'));
+
+    const scanned = await scanSelectedFiles(parent, [todayShow], false);
+    expect(scanned).toHaveLength(1);
+    expect(scanned[0].fullPath).toBe(todayClip);
+    expect(scanned[0].relativePath.replace(/\\/g, '/')).toBe('2026.11.27.ShowToday/today.mp4');
+
+    const res = await packageForDrive(
+      { projectName: 'TodayOnly', sourceDir: parent, packMode: 'none', selectedFilePaths: [todayShow] },
+      () => {}
+    );
+    expect(res.success).toBe(true);
+    expect(res.sourceFiles).toBe(1);
+    expect(res.looseFilePaths).toEqual([todayClip]);
   });
 });

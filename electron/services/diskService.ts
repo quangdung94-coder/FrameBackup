@@ -316,3 +316,68 @@ export async function scanFilesRecursive(
 
   return entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 }
+
+/**
+ * Quét đúng các file / thư mục được người dùng tích chọn bên trong `rootDir`,
+ * KHÔNG quét các thư mục anh em khác (nhanh và tránh quét nhầm show khác).
+ */
+export async function scanSelectedFiles(
+  rootDir: string,
+  selectedPaths: string[],
+  readMetadata: MetadataMode = true,
+  options: ScanOptions = DATA_SCAN_OPTIONS
+): Promise<FileEntry[]> {
+  const seenInputs = new Set<string>();
+  const uniqueInputs: string[] = [];
+  for (const raw of selectedPaths) {
+    const resolved = path.resolve(raw);
+    const key = resolved.toLowerCase();
+    if (!seenInputs.has(key)) {
+      seenInputs.add(key);
+      uniqueInputs.push(resolved);
+    }
+  }
+
+  const byFullPath = new Map<string, FileEntry>();
+  for (const target of uniqueInputs) {
+    let stat;
+    try {
+      stat = await fs.stat(target);
+    } catch {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      const subEntries = await scanFilesRecursive(target, readMetadata, options);
+      for (const entry of subEntries) {
+        const key = path.resolve(entry.fullPath).toLowerCase();
+        if (!byFullPath.has(key)) {
+          byFullPath.set(key, {
+            ...entry,
+            relativePath: path.relative(rootDir, entry.fullPath),
+          });
+        }
+      }
+    } else if (stat.isFile()) {
+      const name = path.basename(target);
+      if (isIgnoredSystemName(name)) continue;
+      const key = target.toLowerCase();
+      if (byFullPath.has(key)) continue;
+      const { mediaType, extension } = classifyFile(name, false);
+      const meta = await shotDateFor(target, stat, readMetadata);
+      byFullPath.set(key, {
+        name,
+        relativePath: path.relative(rootDir, target),
+        fullPath: target,
+        isDirectory: false,
+        sizeBytes: stat.size,
+        mtimeMs: stat.mtimeMs,
+        shotTimeMs: meta.shotTimeMs,
+        dateSource: meta.dateSource,
+        mediaType,
+        extension,
+      });
+    }
+  }
+
+  return Array.from(byFullPath.values()).sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+}

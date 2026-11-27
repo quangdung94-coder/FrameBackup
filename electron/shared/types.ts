@@ -198,6 +198,8 @@ export interface InspectReportRequest {
   jobId?: string;
   projectName: string;
   sourceDir: string;
+  /** Nếu truyền, chỉ quét & trích Thumbnail trong đúng các file / thư mục con được chọn. */
+  selectedFilePaths?: string[];
   verifyStatusText?: string;
   skippedOldFiles?: number;
   keptMismatchFiles?: number;

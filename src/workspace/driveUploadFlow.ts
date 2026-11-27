@@ -78,6 +78,7 @@ export async function runPackUploadAndReport(p: PackUploadReportParams): Promise
     jobId,
     projectName: p.stagingName,
     sourceDir: p.sourceDir,
+    selectedFilePaths: p.selectedFilePaths,
   });
   p.onMediaReport(media);
 

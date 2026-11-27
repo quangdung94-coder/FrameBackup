@@ -80,4 +80,26 @@ describe('copyPlan & copyVerifyService', () => {
     expect(pre.ok).toBe(true);
     expect(pre.conflicts.some((c) => c.name === 'A.MP4' && !c.sameSize)).toBe(true);
   });
+
+  it('pipelines XXHash64 verification across multiple files without leaving .fbpart files', async () => {
+    const src = path.join(tmpRoot, 'MULTI_SRC');
+    const dst = path.join(tmpRoot, 'MULTI_DST');
+    await fsp.mkdir(src, { recursive: true });
+    for (let i = 1; i <= 8; i++) {
+      await fsp.writeFile(path.join(src, `CLIP_${i}.MP4`), Buffer.alloc(64 * 1024, i));
+    }
+
+    const res = await runCopyAndVerify(
+      { stage: 'card-to-drive1', sourceDir: src, destDir: dst },
+      () => {}
+    );
+    expect(res.success).toBe(true);
+    expect(res.copiedFiles).toBe(8);
+    expect(res.verifiedFiles).toBe(8);
+    expect(res.orphanPartFiles ?? []).toHaveLength(0);
+
+    const outNames = await fsp.readdir(dst);
+    expect(outNames.filter((n) => n.endsWith('.fbpart'))).toHaveLength(0);
+    expect(outNames).toHaveLength(8);
+  });
 });
